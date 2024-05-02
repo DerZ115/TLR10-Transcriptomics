@@ -1,0 +1,4 @@
+"ID","Description","setSize","enrichmentScore","NES","pvalue","p.adjust","qvalue","rank","leading_edge","core_enrichment"
+"GO:2000052","positive regulation of non-canonical Wnt signaling pathway",15,-0.985692162849975,-1.86516822254986,1.6576912059287e-06,0.00798178315654671,0.00678082950130415,2,"tags=13%, list=0%, signal=13%","WNT5A/GPC3"
+"GO:2000095","regulation of Wnt signaling pathway, planar cell polarity pathway",16,-0.986470518189614,-1.90890251447152,4.2525806002359e-06,0.0102380877950679,0.00869764642764037,148,"tags=12%, list=0%, signal=12%","SFRP2/GPC3"
+"GO:0072111","cell proliferation involved in kidney development",21,-0.987327546449231,-2.01024168385274,1.11675190296903e-05,0.0179238680426529,0.0152270101576759,2,"tags=10%, list=0%, signal=10%","ITGB3/GPC3"

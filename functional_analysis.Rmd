@@ -1,0 +1,1079 @@
+---
+title: "Functional Analysis"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+---
+
+# Setup
+
+```{r setup}
+
+library(tidyverse)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(pathview)
+library(DOSE)
+
+knitr::opts_chunk$set(fig.width = 10, dpi = 300)
+
+dir.create(path = "./results/FA", showWarnings = FALSE)
+
+```
+
+# Results
+
+## TLR10 light vs. dark 3h
+
+### Gene ontology
+
+```{r TLR3h_go, warning=FALSE}
+
+out.dir <- "./results/FA/TLR10_light_3h_vs_TLR10_dark_3h/"
+
+dir.create(out.dir)
+
+res.TLR3h <- read.csv("results/DESeq/TLR10_light_3h_vs_TLR10_dark_3h_unfiltered.csv") %>%
+  as_tibble() %>%
+  arrange(desc(log2FoldChange))
+
+gene_list.TLR3h <- res.TLR3h$log2FoldChange
+names(gene_list.TLR3h) <- res.TLR3h$ENSG
+  
+set.seed(5892)
+gseGO.TLR3h <- gseGO(gene_list.TLR3h,
+                     OrgDb = org.Hs.eg.db,
+                     keyType = "ENSEMBL",
+                     maxGSSize = 500,
+                     minGSSize = 15,
+                     seed = TRUE)
+
+gseGO.TLR3h <- setReadable(gseGO.TLR3h, "org.Hs.eg.db", "ENSEMBL")
+gseGO.TLR3h
+
+write.csv(data.frame(gseGO.TLR3h), file = paste0(out.dir, "gsea_go.csv"), row.names = F)
+
+TLR3h.go.plot <- nrow(gseGO.TLR3h) > 0
+
+```
+
+```{r TLR3h_go_dotplot, eval=TLR3h.go.plot}
+
+dotplot(gseGO.TLR3h, showCategory = 15, size = NULL, split = ".sign", font.size = 9) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLR3h_go_netplot, eval=TLR3h.go.plot, fig.height=10}
+
+cnetplot(gseGO.TLR3h, showCategory = 5, color.params = list(foldChange = gene_list.TLR3h),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLR3h_go_mapplot, eval=TLR3h.go.plot, fig.height=9}
+gseGO.TLR3h.pwts <- pairwise_termsim(gseGO.TLR3h)
+
+emapplot(gseGO.TLR3h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+```
+
+### KEGG (Kyoto Encyclopedia of Genes and Genomes)
+
+```{r TLR3h_translate_ids, warning=FALSE}
+ids <- bitr(names(gene_list.TLR3h), fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+ids <- ids[!duplicated(ids$ENSEMBL),]
+
+gene_list.TLR3h.entrez <- gene_list.TLR3h[names(gene_list.TLR3h) %in% ids$ENSEMBL]
+names(gene_list.TLR3h.entrez) <- ids$ENTREZID
+gene_list.TLR3h.entrez <- gene_list.TLR3h.entrez[!duplicated(names(gene_list.TLR3h.entrez))]
+
+```
+
+
+```{r TLR3h_kegg, warning=FALSE}
+
+set.seed(5923)
+gseKEGG.TLR3h <- gseKEGG(gene_list.TLR3h.entrez,
+                         organism = "hsa",
+                         keyType = "ncbi-geneid",
+                         eps = 0,
+                         maxGSSize = 500,
+                         minGSSize = 15,
+                         seed = T)
+
+gseKEGG.TLR3h <- setReadable(gseKEGG.TLR3h, "org.Hs.eg.db", "ENTREZID")
+gseKEGG.TLR3h
+
+write.csv(data.frame(gseKEGG.TLR3h), file = paste0(out.dir, "gsea_kegg.csv"), row.names = F)
+
+TLR3h.kegg.plot <- nrow(gseKEGG.TLR3h) > 0
+
+```
+
+
+```{r TLR3h_kegg_dotplot, eval=TLR3h.kegg.plot, fid.width = 10, fig.height=10}
+
+dotplot(gseKEGG.TLR3h, showCategory = 15, size = NULL, split = ".sign", font.size = 9, label_format = 40) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLR3h_kegg_netplot, eval=TLR3h.kegg.plot, fig.height=10}
+
+cnetplot(gseKEGG.TLR3h, showCategory = 5, color.params = list(foldChange = gene_list.TLR3h.entrez),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLR3h_kegg_mapplot, eval=TLR3h.kegg.plot, fig.height=9}
+gseKEGG.TLR3h.pwts <- pairwise_termsim(gseKEGG.TLR3h)
+
+emapplot(gseKEGG.TLR3h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLR3h_kegg_pathview, eval=TLR3h.kegg.plot}
+
+pathview(gene.data = gene_list.TLR3h.entrez, pathway.id = gseKEGG.TLR3h@result$ID[1], species = "hsa")
+
+filename <- paste0(gseKEGG.TLR3h@result$ID[1], ".pathview.png")
+
+file.rename(filename, paste0(out.dir, filename))
+
+knitr::include_graphics(paste0(out.dir, filename))
+
+```
+
+### Disease ontology
+
+```{r TLR3h_do, warning=FALSE}
+
+set.seed(5534)
+gseDO.TLR3h <- gseDO(gene_list.TLR3h.entrez,
+                     eps = 0,
+                     maxGSSize = 500,
+                     minGSSize = 15,
+                     seed = T)
+
+gseDO.TLR3h <- setReadable(gseDO.TLR3h, "org.Hs.eg.db", "ENTREZID")
+gseDO.TLR3h
+
+write.csv(data.frame(gseDO.TLR3h), file = paste0(out.dir, "gsea_do.csv"), row.names = F)
+
+TLR3h.DO.plot <- nrow(gseDO.TLR3h) > 0
+
+```
+
+```{r TLR3h_do_dotplot, eval=TLR3h.DO.plot}
+
+dotplot(gseDO.TLR3h, showCategory = 15, size = NULL, split = ".sign", font.size = 9, label_format = 40) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLR3h_do_netplot, eval=TLR3h.DO.plot}
+
+cnetplot(gseDO.TLR3h, showCategory = 5, layout = "dh", color.params = list(foldChange = gene_list.TLR3h.entrez),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLR3h_do_mapplot, eval=TLR3h.DO.plot}
+
+gseDO.TLR3h.pwts <- pairwise_termsim(gseDO.TLR3h)
+
+emapplot(gseDO.TLR3h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+## TLR10 light vs. dark 16h
+
+### Gene ontology
+
+```{r TLR16h_go, warning=FALSE}
+
+out.dir <- "./results/FA/TLR10_light_16h_vs_TLR10_dark_16h/"
+
+dir.create(out.dir)
+
+res.TLR16h <- read.csv("results/DESeq/TLR10_light_16h_vs_TLR10_dark_16h_unfiltered.csv") %>%
+  as_tibble() %>%
+  arrange(desc(log2FoldChange))
+
+gene_list.TLR16h <- res.TLR16h$log2FoldChange
+names(gene_list.TLR16h) <- res.TLR16h$ENSG
+  
+set.seed(4735)
+gseGO.TLR16h <- gseGO(gene_list.TLR16h,
+                     OrgDb = org.Hs.eg.db,
+                     keyType = "ENSEMBL",
+                     eps = 0,
+                     maxGSSize = 500,
+                     minGSSize = 15,
+                     seed = TRUE)
+
+gseGO.TLR16h <- setReadable(gseGO.TLR16h, "org.Hs.eg.db", "ENSEMBL")
+gseGO.TLR16h
+
+write.csv(data.frame(gseGO.TLR16h), file = paste0(out.dir, "gsea_go.csv"), row.names = F)
+
+TLR16h.go.plot <- nrow(gseGO.TLR16h) > 0
+
+```
+
+```{r TLR16h_go_dotplot, eval=TLR16h.go.plot, fig.width=10, fig.height=10}
+
+dotplot(gseGO.TLR16h, showCategory = 15, size = NULL, split = ".sign", font.size = 9) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLR16h_go_netplot, eval=TLR16h.go.plot, fig.height=10}
+
+cnetplot(gseGO.TLR16h, showCategory = 5, color.params = list(foldChange = gene_list.TLR16h),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLR16h_go_mapplot, eval=TLR16h.go.plot, fig.height=9}
+gseGO.TLR16h.pwts <- pairwise_termsim(gseGO.TLR16h)
+
+emapplot(gseGO.TLR16h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+```
+
+### KEGG
+
+```{r TLR16h_translate_ids, warning=FALSE}
+ids <- bitr(names(gene_list.TLR16h), fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+ids <- ids[!duplicated(ids$ENSEMBL),]
+
+gene_list.TLR16h.entrez <- gene_list.TLR16h[names(gene_list.TLR16h) %in% ids$ENSEMBL]
+names(gene_list.TLR16h.entrez) <- ids$ENTREZID
+gene_list.TLR16h.entrez <- gene_list.TLR16h.entrez[!duplicated(names(gene_list.TLR16h.entrez))]
+
+```
+
+
+```{r TLR16h_kegg, warning=FALSE}
+
+set.seed(5923)
+gseKEGG.TLR16h <- gseKEGG(gene_list.TLR16h.entrez,
+                         organism = "hsa",
+                         keyType = "ncbi-geneid",
+                         eps = 0,
+                         maxGSSize = 500,
+                         minGSSize = 15,
+                         seed = T)
+
+gseKEGG.TLR16h <- setReadable(gseKEGG.TLR16h, "org.Hs.eg.db", "ENTREZID")
+gseKEGG.TLR16h
+
+write.csv(data.frame(gseKEGG.TLR16h), file = paste0(out.dir, "gsea_kegg.csv"), row.names = F)
+
+TLR16h.kegg.plot <- nrow(gseKEGG.TLR16h) > 0
+
+```
+
+```{r TLR16h_kegg_dotplot, eval=TLR16h.kegg.plot, fid.width = 10, fig.height=10}
+
+dotplot(gseKEGG.TLR16h, showCategory = 15, size = NULL, split = ".sign", font.size = 9, label_format = 40) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLR16h_kegg_netplot, eval=TLR16h.kegg.plot, fig.height=10}
+
+cnetplot(gseKEGG.TLR16h, showCategory = 5, color.params = list(foldChange = gene_list.TLR16h.entrez),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLR16h_kegg_mapplot, eval=TLR16h.kegg.plot, fig.height=9}
+gseKEGG.TLR16h.pwts <- pairwise_termsim(gseKEGG.TLR16h)
+
+emapplot(gseKEGG.TLR16h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLR16h_kegg_pathview, eval=TLR16h.kegg.plot}
+
+pathview(gene.data = gene_list.TLR16h.entrez, pathway.id = gseKEGG.TLR16h@result$ID[1], species = "hsa")
+
+filename <- paste0(gseKEGG.TLR16h@result$ID[1], ".pathview.png")
+
+file.rename(filename, paste0(out.dir, filename))
+
+knitr::include_graphics(paste0(out.dir, filename))
+
+```
+
+### Disease ontology
+
+```{r TLR16h_do, warning=FALSE}
+
+set.seed(6246)
+gseDO.TLR16h <- gseDO(gene_list.TLR16h.entrez,
+                     eps = 0,
+                     maxGSSize = 500,
+                     minGSSize = 15,
+                     seed = T)
+
+gseDO.TLR16h <- setReadable(gseDO.TLR16h, "org.Hs.eg.db", "ENTREZID")
+gseDO.TLR16h
+
+write.csv(data.frame(gseDO.TLR16h), file = paste0(out.dir, "gsea_do.csv"), row.names = F)
+
+TLR16h.DO.plot <- nrow(gseDO.TLR16h) > 0
+
+```
+
+```{r TLR16h_do_dotplot, eval=TLR16h.DO.plot}
+
+dotplot(gseDO.TLR16h, showCategory = 15, size = NULL, split = ".sign", font.size = 9, label_format = 40) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLR16h_do_netplot, eval=TLR16h.DO.plot}
+
+cnetplot(gseDO.TLR16h, showCategory = 5, color.params = list(foldChange = gene_list.TLR16h.entrez),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLR16h_do_mapplot, eval=TLR16h.DO.plot}
+
+gseDO.TLR16h.pwts <- pairwise_termsim(gseDO.TLR16h)
+
+emapplot(gseDO.TLR16h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+## TLR10 light vs. wildtype light 3h
+
+### Gene ontology
+
+```{r TLRlightWT3h_go, warning=FALSE}
+
+out.dir <- "./results/FA/TLR10_light_3h_vs_wildtype_light_3h/"
+
+dir.create(out.dir)
+
+res.TLRlightWT3h <- read.csv("results/DESeq/TLR10_light_3h_vs_wildtype_light_3h_unfiltered.csv") %>%
+  as_tibble() %>%
+  arrange(desc(log2FoldChange))
+
+gene_list.TLRlightWT3h <- res.TLRlightWT3h$log2FoldChange
+names(gene_list.TLRlightWT3h) <- res.TLRlightWT3h$ENSG
+  
+set.seed(4735)
+gseGO.TLRlightWT3h <- gseGO(gene_list.TLRlightWT3h,
+                     OrgDb = org.Hs.eg.db,
+                     keyType = "ENSEMBL",
+                     eps = 0,
+                     maxGSSize = 500,
+                     minGSSize = 15,
+                     seed = TRUE)
+
+gseGO.TLRlightWT3h <- setReadable(gseGO.TLRlightWT3h, "org.Hs.eg.db", "ENSEMBL")
+gseGO.TLRlightWT3h
+
+write.csv(data.frame(gseGO.TLRlightWT3h), file = paste0(out.dir, "gsea_go.csv"), row.names = F)
+
+TLRlightWT3h.go.plot <- nrow(gseGO.TLRlightWT3h) > 0
+
+```
+
+```{r TLRlightWT3h_go_dotplot, eval=TLRlightWT3h.go.plot}
+
+dotplot(gseGO.TLRlightWT3h, showCategory = 15, size = NULL, split = ".sign", font.size = 9) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRlightWT3h_go_netplot, eval=TLRlightWT3h.go.plot, fig.height=10}
+
+cnetplot(gseGO.TLRlightWT3h, showCategory = 5, color.params = list(foldChange = gene_list.TLRlightWT3h),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLRlightWT3h_go_mapplot, eval=TLRlightWT3h.go.plot, fig.height=9}
+gseGO.TLRlightWT3h.pwts <- pairwise_termsim(gseGO.TLRlightWT3h)
+
+emapplot(gseGO.TLRlightWT3h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+```
+
+### KEGG
+
+```{r TLRlightWT3h_translate_ids, warning=FALSE}
+ids <- bitr(names(gene_list.TLRlightWT3h), fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+ids <- ids[!duplicated(ids$ENSEMBL),]
+
+gene_list.TLRlightWT3h.entrez <- gene_list.TLRlightWT3h[names(gene_list.TLRlightWT3h) %in% ids$ENSEMBL]
+names(gene_list.TLRlightWT3h.entrez) <- ids$ENTREZID
+gene_list.TLRlightWT3h.entrez <- gene_list.TLRlightWT3h.entrez[!duplicated(names(gene_list.TLRlightWT3h.entrez))]
+
+```
+
+ 
+```{r TLRlightWT3h_kegg, warning=FALSE}
+
+set.seed(5923)
+gseKEGG.TLRlightWT3h <- gseKEGG(gene_list.TLRlightWT3h.entrez,
+                         organism = "hsa",
+                         keyType = "ncbi-geneid",
+                         eps = 0,
+                         maxGSSize = 500,
+                         minGSSize = 15,
+                         seed = T)
+
+gseKEGG.TLRlightWT3h <- setReadable(gseKEGG.TLRlightWT3h, "org.Hs.eg.db", "ENTREZID")
+gseKEGG.TLRlightWT3h
+
+write.csv(data.frame(gseKEGG.TLRlightWT3h), file = paste0(out.dir, "gsea_kegg.csv"), row.names = F)
+
+TLRlightWT3h.kegg.plot <- nrow(gseKEGG.TLRlightWT3h) > 0
+
+```
+
+```{r TLRlightWT3h_kegg_dotplot, eval=TLRlightWT3h.kegg.plot, fid.width = 10, fig.height=10}
+
+dotplot(gseKEGG.TLRlightWT3h, showCategory = 15, size = NULL, split = ".sign", font.size = 9, label_format = 40) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRlightWT3h_kegg_netplot, eval=TLRlightWT3h.kegg.plot, fig.height=10}
+
+cnetplot(gseKEGG.TLRlightWT3h, showCategory = 5, color.params = list(foldChange = gene_list.TLRlightWT3h.entrez),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLRlightWT3h_kegg_mapplot, eval=TLRlightWT3h.kegg.plot, fig.height=9}
+gseKEGG.TLRlightWT3h.pwts <- pairwise_termsim(gseKEGG.TLRlightWT3h)
+
+emapplot(gseKEGG.TLRlightWT3h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRlightWT3h_kegg_pathview, eval=TLRlightWT3h.kegg.plot}
+
+pathview(gene.data = gene_list.TLRlightWT3h.entrez, pathway.id = gseKEGG.TLRlightWT3h@result$ID[1], species = "hsa")
+
+filename <- paste0(gseKEGG.TLRlightWT3h@result$ID[1], ".pathview.png")
+
+file.rename(filename, paste0(out.dir, filename))
+
+knitr::include_graphics(paste0(out.dir, filename))
+
+```
+
+### Disease ontology
+
+```{r TLRlightWT3h_do, warning=FALSE}
+
+set.seed(6246)
+gseDO.TLRlightWT3h <- gseDO(gene_list.TLRlightWT3h.entrez,
+                     eps = 0,
+                     maxGSSize = 500,
+                     minGSSize = 15,
+                     seed = T)
+
+gseDO.TLRlightWT3h <- setReadable(gseDO.TLRlightWT3h, "org.Hs.eg.db", "ENTREZID")
+gseDO.TLRlightWT3h
+
+write.csv(data.frame(gseDO.TLRlightWT3h), file = paste0(out.dir, "gsea_do.csv"), row.names = F)
+
+TLRlightWT3h.DO.plot <- nrow(gseDO.TLRlightWT3h) > 0
+
+```
+
+```{r TLRlightWT3h_do_dotplot, eval=TLRlightWT3h.DO.plot}
+
+dotplot(gseDO.TLRlightWT3h, showCategory = 15, size = NULL, split = ".sign", font.size = 9, label_format = 40) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRlightWT3h_do_netplot, eval=TLRlightWT3h.DO.plot}
+
+cnetplot(gseDO.TLRlightWT3h, showCategory = 5, color.params = list(foldChange = gene_list.TLRlightWT3h.entrez),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLRlightWT3h_do_mapplot, eval=TLRlightWT3h.DO.plot}
+
+gseDO.TLRlightWT3h.pwts <- pairwise_termsim(gseDO.TLRlightWT3h)
+
+emapplot(gseDO.TLRlightWT3h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+## TLR10 light vs. wildtype light 16h
+
+### Gene ontology
+
+```{r TLRlightWT16h_go, warning=FALSE}
+
+out.dir <- "./results/FA/TLR10_light_16h_vs_wildtype_light_16h/"
+
+dir.create(out.dir)
+
+res.TLRlightWT16h <- read.csv("results/DESeq/TLR10_light_16h_vs_wildtype_light_16h_unfiltered.csv") %>%
+  as_tibble() %>%
+  arrange(desc(log2FoldChange))
+
+gene_list.TLRlightWT16h <- res.TLRlightWT16h$log2FoldChange
+names(gene_list.TLRlightWT16h) <- res.TLRlightWT16h$ENSG
+  
+set.seed(6548)
+gseGO.TLRlightWT16h <- gseGO(gene_list.TLRlightWT16h,
+                     OrgDb = org.Hs.eg.db,
+                     keyType = "ENSEMBL",
+                     eps = 0,
+                     maxGSSize = 500,
+                     minGSSize = 15,
+                     seed = TRUE)
+
+gseGO.TLRlightWT16h <- setReadable(gseGO.TLRlightWT16h, "org.Hs.eg.db", "ENSEMBL")
+gseGO.TLRlightWT16h
+
+write.csv(data.frame(gseGO.TLRlightWT16h), file = paste0(out.dir, "gsea_go.csv"), row.names = F)
+
+TLRlightWT16h.go.plot <- nrow(gseGO.TLRlightWT16h) > 0
+
+```
+
+```{r TLRlightWT16h_go_dotplot, eval=TLRlightWT16h.go.plot}
+
+dotplot(gseGO.TLRlightWT16h, showCategory = 15, size = NULL, split = ".sign", font.size = 9) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRlightWT16h_go_netplot, eval=TLRlightWT16h.go.plot, fig.height=10}
+
+cnetplot(gseGO.TLRlightWT16h, showCategory = 5, color.params = list(foldChange = gene_list.TLRlightWT16h),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLRlightWT16h_go_mapplot, eval=TLRlightWT16h.go.plot, fig.height=9}
+gseGO.TLRlightWT16h.pwts <- pairwise_termsim(gseGO.TLRlightWT16h)
+
+emapplot(gseGO.TLRlightWT16h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+```
+
+### KEGG
+
+```{r TLRlightWT16h_translate_ids, warning=FALSE}
+ids <- bitr(names(gene_list.TLRlightWT16h), fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+ids <- ids[!duplicated(ids$ENSEMBL),]
+
+gene_list.TLRlightWT16h.entrez <- gene_list.TLRlightWT16h[names(gene_list.TLRlightWT16h) %in% ids$ENSEMBL]
+names(gene_list.TLRlightWT16h.entrez) <- ids$ENTREZID
+gene_list.TLRlightWT16h.entrez <- gene_list.TLRlightWT16h.entrez[!duplicated(names(gene_list.TLRlightWT16h.entrez))]
+
+```
+
+
+```{r TLRlightWT16h_kegg, warning=FALSE}
+
+set.seed(5923)
+gseKEGG.TLRlightWT16h <- gseKEGG(gene_list.TLRlightWT16h.entrez,
+                         organism = "hsa",
+                         keyType = "ncbi-geneid",
+                         eps = 0,
+                         maxGSSize = 500,
+                         minGSSize = 15,
+                         seed = T)
+
+gseKEGG.TLRlightWT16h <- setReadable(gseKEGG.TLRlightWT16h, "org.Hs.eg.db", "ENTREZID")
+gseKEGG.TLRlightWT16h
+
+write.csv(data.frame(gseKEGG.TLRlightWT16h), file = paste0(out.dir, "gsea_kegg.csv"), row.names = F)
+
+TLRlightWT16h.kegg.plot <- nrow(gseKEGG.TLRlightWT16h) > 0
+
+```
+
+```{r TLRlightWT16h_kegg_dotplot, eval=TLRlightWT16h.kegg.plot, fid.width = 10, fig.height=10}
+
+dotplot(gseKEGG.TLRlightWT16h, showCategory = 15, size = NULL, split = ".sign", font.size = 9, label_format = 40) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRlightWT16h_kegg_netplot, eval=TLRlightWT16h.kegg.plot, fig.height=10}
+
+cnetplot(gseKEGG.TLRlightWT16h, showCategory = 5, color.params = list(foldChange = gene_list.TLRlightWT16h.entrez),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLRlightWT16h_kegg_mapplot, eval=TLRlightWT16h.kegg.plot, fig.height=9}
+gseKEGG.TLRlightWT16h.pwts <- pairwise_termsim(gseKEGG.TLRlightWT16h)
+
+emapplot(gseKEGG.TLRlightWT16h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRlightWT16h_kegg_pathview, eval=TLRlightWT16h.kegg.plot}
+
+pathview(gene.data = gene_list.TLRlightWT16h.entrez, pathway.id = gseKEGG.TLRlightWT16h@result$ID[1], species = "hsa")
+
+filename <- paste0(gseKEGG.TLRlightWT16h@result$ID[1], ".pathview.png")
+
+file.rename(filename, paste0(out.dir, filename))
+
+knitr::include_graphics(paste0(out.dir, filename))
+
+```
+
+### Disease ontology
+
+```{r TLRlightWT16h_do, warning=FALSE}
+
+set.seed(6246)
+gseDO.TLRlightWT16h <- gseDO(gene_list.TLRlightWT16h.entrez,
+                     eps = 0,
+                     maxGSSize = 500,
+                     minGSSize = 15,
+                     seed = T)
+
+gseDO.TLRlightWT16h <- setReadable(gseDO.TLRlightWT16h, "org.Hs.eg.db", "ENTREZID")
+gseDO.TLRlightWT16h
+
+write.csv(data.frame(gseDO.TLRlightWT16h), file = paste0(out.dir, "gsea_do.csv"), row.names = F)
+
+TLRlightWT16h.DO.plot <- nrow(gseDO.TLRlightWT16h) > 0
+
+```
+
+```{r TLRlightWT16h_do_dotplot, eval=TLRlightWT16h.DO.plot}
+
+dotplot(gseDO.TLRlightWT16h, showCategory = 15, size = NULL, split = ".sign", font.size = 9, label_format = 40) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRlightWT16h_do_netplot, eval=TLRlightWT16h.DO.plot}
+
+cnetplot(gseDO.TLRlightWT16h, showCategory = 5, color.params = list(foldChange = gene_list.TLRlightWT16h.entrez),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLRlightWT16h_do_mapplot, eval=TLRlightWT16h.DO.plot}
+
+gseDO.TLRlightWT16h.pwts <- pairwise_termsim(gseDO.TLRlightWT16h)
+
+emapplot(gseDO.TLRlightWT16h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+## TLR10 dark vs. wildtype light 3h
+
+### Gene ontology
+
+```{r TLRdarkWT3h_go, warning=FALSE}
+
+out.dir <- "./results/FA/TLR10_dark_3h_vs_wildtype_light_3h/"
+
+dir.create(out.dir)
+
+res.TLRdarkWT3h <- read.csv("results/DESeq/TLR10_dark_3h_vs_wildtype_light_3h_unfiltered.csv") %>%
+  as_tibble() %>%
+  arrange(desc(log2FoldChange))
+
+gene_list.TLRdarkWT3h <- res.TLRdarkWT3h$log2FoldChange
+names(gene_list.TLRdarkWT3h) <- res.TLRdarkWT3h$ENSG
+  
+set.seed(4735)
+gseGO.TLRdarkWT3h <- gseGO(gene_list.TLRdarkWT3h,
+                     OrgDb = org.Hs.eg.db,
+                     keyType = "ENSEMBL",
+                     eps = 0,
+                     maxGSSize = 500,
+                     minGSSize = 15,
+                     seed = TRUE)
+
+gseGO.TLRdarkWT3h <- setReadable(gseGO.TLRdarkWT3h, "org.Hs.eg.db", "ENSEMBL")
+gseGO.TLRdarkWT3h
+
+write.csv(data.frame(gseGO.TLRdarkWT3h), file = paste0(out.dir, "gsea_go.csv"), row.names = F)
+
+TLRdarkWT3h.go.plot <- nrow(gseGO.TLRdarkWT3h) > 0
+
+```
+
+```{r TLRdarkWT3h_go_dotplot, eval=TLRdarkWT3h.go.plot}
+
+dotplot(gseGO.TLRdarkWT3h, showCategory = 15, size = NULL, split = ".sign", font.size = 9) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRdarkWT3h_go_netplot, eval=TLRdarkWT3h.go.plot, fig.height=10}
+
+cnetplot(gseGO.TLRdarkWT3h, showCategory = 5, color.params = list(foldChange = gene_list.TLRdarkWT3h),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLRdarkWT3h_go_mapplot, eval=TLRdarkWT3h.go.plot, fig.height=9}
+gseGO.TLRdarkWT3h.pwts <- pairwise_termsim(gseGO.TLRdarkWT3h)
+
+emapplot(gseGO.TLRdarkWT3h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+```
+
+### KEGG
+
+```{r TLRdarkWT3h_translate_ids, warning=FALSE}
+
+ids <- bitr(names(gene_list.TLRdarkWT3h), fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+ids <- ids[!duplicated(ids$ENSEMBL),]
+
+gene_list.TLRdarkWT3h.entrez <- gene_list.TLRdarkWT3h[names(gene_list.TLRdarkWT3h) %in% ids$ENSEMBL]
+names(gene_list.TLRdarkWT3h.entrez) <- ids$ENTREZID
+gene_list.TLRdarkWT3h.entrez <- gene_list.TLRdarkWT3h.entrez[!duplicated(names(gene_list.TLRdarkWT3h.entrez))]
+
+```
+
+
+```{r TLRdarkWT3h_kegg, warning=FALSE}
+
+set.seed(5923)
+gseKEGG.TLRdarkWT3h <- gseKEGG(gene_list.TLRdarkWT3h.entrez,
+                         organism = "hsa",
+                         keyType = "ncbi-geneid",
+                         eps = 0,
+                         maxGSSize = 500,
+                         minGSSize = 15,
+                         seed = T)
+
+gseKEGG.TLRdarkWT3h <- setReadable(gseKEGG.TLRdarkWT3h, "org.Hs.eg.db", "ENTREZID")
+gseKEGG.TLRdarkWT3h
+
+write.csv(data.frame(gseKEGG.TLRdarkWT3h), file = paste0(out.dir, "gsea_kegg.csv"), row.names = F)
+
+TLRdarkWT3h.kegg.plot <- nrow(gseKEGG.TLRdarkWT3h) > 0
+
+```
+
+```{r TLRdarkWT3h_kegg_dotplot, eval=TLRdarkWT3h.kegg.plot, fid.width = 10, fig.height=10}
+
+dotplot(gseKEGG.TLRdarkWT3h, showCategory = 15, size = NULL, split = ".sign", font.size = 9, label_format = 40) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRdarkWT3h_kegg_netplot, eval=TLRdarkWT3h.kegg.plot, fig.height=10}
+
+cnetplot(gseKEGG.TLRdarkWT3h, showCategory = 5, color.params = list(foldChange = gene_list.TLRdarkWT3h.entrez),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLRdarkWT3h_kegg_mapplot, eval=TLRdarkWT3h.kegg.plot, fig.height=9}
+gseKEGG.TLRdarkWT3h.pwts <- pairwise_termsim(gseKEGG.TLRdarkWT3h)
+
+emapplot(gseKEGG.TLRdarkWT3h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRdarkWT3h_kegg_pathview, eval=TLRdarkWT3h.kegg.plot}
+
+pathview(gene.data = gene_list.TLRdarkWT3h.entrez, pathway.id = gseKEGG.TLRdarkWT3h@result$ID[1], species = "hsa")
+
+filename <- paste0(gseKEGG.TLRdarkWT3h@result$ID[1], ".pathview.png")
+
+file.rename(filename, paste0(out.dir, filename))
+
+knitr::include_graphics(paste0(out.dir, filename))
+
+```
+
+### Disease ontology
+
+```{r TLRdarkWT3h_do, warning=FALSE}
+
+set.seed(6246)
+gseDO.TLRdarkWT3h <- gseDO(gene_list.TLRdarkWT3h.entrez,
+                     eps = 0,
+                     maxGSSize = 500,
+                     minGSSize = 15,
+                     seed = T)
+
+gseDO.TLRdarkWT3h <- setReadable(gseDO.TLRdarkWT3h, "org.Hs.eg.db", "ENTREZID")
+gseDO.TLRdarkWT3h
+
+write.csv(data.frame(gseDO.TLRdarkWT3h), file = paste0(out.dir, "gsea_do.csv"), row.names = F)
+
+TLRdarkWT3h.DO.plot <- nrow(gseDO.TLRdarkWT3h) > 0
+
+```
+
+```{r TLRdarkWT3h_do_dotplot, eval=TLRdarkWT3h.DO.plot}
+
+dotplot(gseDO.TLRdarkWT3h, showCategory = 15, size = NULL, split = ".sign", font.size = 9, label_format = 40) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRdarkWT3h_do_netplot, eval=TLRdarkWT3h.DO.plot}
+
+cnetplot(gseDO.TLRdarkWT3h, showCategory = 5, color.params = list(foldChange = gene_list.TLRdarkWT3h.entrez),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLRdarkWT3h_do_mapplot, eval=TLRdarkWT3h.DO.plot}
+
+gseDO.TLRdarkWT3h.pwts <- pairwise_termsim(gseDO.TLRdarkWT3h)
+
+emapplot(gseDO.TLRdarkWT3h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+
+## TLR10 dark vs. wildtype light 16h
+
+### Gene ontology
+
+```{r TLRdarkWT16h_go, warning=FALSE}
+
+out.dir <- "./results/FA/TLR10_dark_16h_vs_wildtype_light_16h/"
+
+dir.create(out.dir)
+
+res.TLRdarkWT16h <- read.csv("results/DESeq/TLR10_dark_16h_vs_wildtype_light_16h_unfiltered.csv") %>%
+  as_tibble() %>%
+  arrange(desc(log2FoldChange))
+
+gene_list.TLRdarkWT16h <- res.TLRdarkWT16h$log2FoldChange
+names(gene_list.TLRdarkWT16h) <- res.TLRdarkWT16h$ENSG
+  
+set.seed(4735)
+gseGO.TLRdarkWT16h <- gseGO(gene_list.TLRdarkWT16h,
+                     OrgDb = org.Hs.eg.db,
+                     keyType = "ENSEMBL",
+                     eps = 0,
+                     maxGSSize = 500,
+                     minGSSize = 15,
+                     seed = TRUE)
+
+gseGO.TLRdarkWT16h <- setReadable(gseGO.TLRdarkWT16h, "org.Hs.eg.db", "ENSEMBL")
+gseGO.TLRdarkWT16h
+
+write.csv(data.frame(gseGO.TLRdarkWT16h), file = paste0(out.dir, "gsea_go.csv"), row.names = F)
+
+TLRdarkWT16h.go.plot <- nrow(gseGO.TLRdarkWT16h) > 0
+
+```
+
+```{r TLRdarkWT16h_go_dotplot, eval=TLRdarkWT16h.go.plot}
+
+dotplot(gseGO.TLRdarkWT16h, showCategory = 15, size = NULL, split = ".sign", font.size = 9) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRdarkWT16h_go_netplot, eval=TLRdarkWT16h.go.plot, fig.height=10}
+
+cnetplot(gseGO.TLRdarkWT16h, showCategory = 5, color.params = list(foldChange = gene_list.TLRdarkWT16h),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLRdarkWT16h_go_mapplot, eval=TLRdarkWT16h.go.plot, fig.height=9}
+gseGO.TLRdarkWT16h.pwts <- pairwise_termsim(gseGO.TLRdarkWT16h)
+
+emapplot(gseGO.TLRdarkWT16h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+```
+
+### KEGG
+
+```{r TLRdarkWT16h_translate_ids, warning=FALSE}
+ids <- bitr(names(gene_list.TLRdarkWT16h), fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+ids <- ids[!duplicated(ids$ENSEMBL),]
+
+gene_list.TLRdarkWT16h.entrez <- gene_list.TLRdarkWT16h[names(gene_list.TLRdarkWT16h) %in% ids$ENSEMBL]
+names(gene_list.TLRdarkWT16h.entrez) <- ids$ENTREZID
+gene_list.TLRdarkWT16h.entrez <- gene_list.TLRdarkWT16h.entrez[!duplicated(names(gene_list.TLRdarkWT16h.entrez))]
+
+```
+
+
+```{r TLRdarkWT16h_kegg, warning=FALSE}
+
+set.seed(5923)
+gseKEGG.TLRdarkWT16h <- gseKEGG(gene_list.TLRdarkWT16h.entrez,
+                         organism = "hsa",
+                         keyType = "ncbi-geneid",
+                         eps = 0,
+                         maxGSSize = 500,
+                         minGSSize = 15,
+                         seed = T)
+
+gseKEGG.TLRdarkWT16h <- setReadable(gseKEGG.TLRdarkWT16h, "org.Hs.eg.db", "ENTREZID")
+gseKEGG.TLRdarkWT16h
+
+write.csv(data.frame(gseKEGG.TLRdarkWT16h), file = paste0(out.dir, "gsea_kegg.csv"), row.names = F)
+
+TLRdarkWT16h.kegg.plot <- nrow(gseKEGG.TLRdarkWT16h) > 0
+
+```
+
+```{r TLRdarkWT16h_kegg_dotplot, eval=TLRdarkWT16h.kegg.plot, fid.width = 10, fig.height=10}
+
+dotplot(gseKEGG.TLRdarkWT16h, showCategory = 15, size = NULL, split = ".sign", font.size = 9, label_format = 40) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRdarkWT16h_kegg_netplot, eval=TLRdarkWT16h.kegg.plot, fig.height=10}
+
+cnetplot(gseKEGG.TLRdarkWT16h, showCategory = 5, color.params = list(foldChange = gene_list.TLRdarkWT16h.entrez),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLRdarkWT16h_kegg_mapplot, eval=TLRdarkWT16h.kegg.plot, fig.height=9}
+gseKEGG.TLRdarkWT16h.pwts <- pairwise_termsim(gseKEGG.TLRdarkWT16h)
+
+emapplot(gseKEGG.TLRdarkWT16h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRdarkWT16h_kegg_pathview, eval=TLRdarkWT16h.kegg.plot}
+
+pathview(gene.data = gene_list.TLRdarkWT16h.entrez, pathway.id = gseKEGG.TLRdarkWT16h@result$ID[1], species = "hsa")
+
+filename <- paste0(gseKEGG.TLRdarkWT16h@result$ID[1], ".pathview.png")
+
+file.rename(filename, paste0(out.dir, filename))
+
+knitr::include_graphics(paste0(out.dir, filename))
+
+```
+
+### Disease ontology
+
+```{r TLRdarkWT16h_do, warning=FALSE}
+
+set.seed(6246)
+gseDO.TLRdarkWT16h <- gseDO(gene_list.TLRdarkWT16h.entrez,
+                     eps = 0,
+                     maxGSSize = 500,
+                     minGSSize = 15,
+                     seed = T)
+
+gseDO.TLRdarkWT16h <- setReadable(gseDO.TLRdarkWT16h, "org.Hs.eg.db", "ENTREZID")
+gseDO.TLRdarkWT16h
+
+write.csv(data.frame(gseDO.TLRdarkWT16h), file = paste0(out.dir, "gsea_do.csv"), row.names = F)
+
+TLRdarkWT16h.DO.plot <- nrow(gseDO.TLRdarkWT16h) > 0
+
+```
+
+```{r TLRdarkWT16h_do_dotplot, eval=TLRdarkWT16h.DO.plot}
+
+dotplot(gseDO.TLRdarkWT16h, showCategory = 15, size = NULL, split = ".sign", font.size = 9, label_format = 40) + 
+  facet_grid(~.sign) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```
+
+```{r TLRdarkWT16h_do_netplot, eval=TLRdarkWT16h.DO.plot}
+
+cnetplot(gseDO.TLRdarkWT16h, showCategory = 5, color.params = list(foldChange = gene_list.TLRdarkWT16h.entrez),
+         cex.params = list(category_label = 0.6, gene_label = 0.4)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-2, 2), name = "Fold Change", oob = scales::squish)
+
+```
+
+```{r TLRdarkWT16h_do_mapplot, eval=TLRdarkWT16h.DO.plot}
+
+gseDO.TLRdarkWT16h.pwts <- pairwise_termsim(gseDO.TLRdarkWT16h)
+
+emapplot(gseDO.TLRdarkWT16h.pwts, force = 1.5,
+         cex.params = list(category_label = 0.8)) +
+  scale_fill_gradient(low = "red", high = "white", limits = c(0, 0.05), name = "adj. p-value")
+
+```

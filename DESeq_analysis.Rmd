@@ -1,0 +1,952 @@
+---
+title: "Differential Expression Analysis"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+---
+# Setup
+
+## Load libraries
+
+```{r load_libraries, message=F, warning=F}
+
+library(DESeq2)
+library(dplyr)
+library(magrittr)
+library(pheatmap)
+library(tidyverse)
+library(RColorBrewer)
+library(stringr)
+library(ggplot2)
+library(ggrepel)
+library(ggpubr)
+library(org.Hs.eg.db)
+
+```
+
+```{r misc_setup}
+
+dir.create("results/DESeq", showWarnings = F, recursive = T)
+
+knitr::opts_chunk$set(fig.width = 10, dpi = 300, results = "hold", fig.show = "hold")
+
+```
+
+## Import data
+
+```{r import_data}
+
+# Read main counts table 
+countdata <- read.delim("DE/full/Stierschneider_18samples_raw_gene_counts_GeneSymbols_GeneTypes.tsv")
+
+# Read sample info table
+sampledata <- read.csv("samples.csv") %>% as_tibble()
+
+```
+
+## Prepare data for analysis
+
+```{r, prepare_data}
+
+countdata %<>% 
+  # Remove genes with all zero counts
+  filter(rowSums(.[, sapply(., is.numeric)]) > 0) %>% 
+  # Remove version from ENSEMBL id, as it interferes with annotation
+  mutate(ENSG = str_remove(ENSG, "\\..*$")) %>% 
+  # Merge duplicate entries
+  group_by(ENSG) %>%
+  summarise(across(!where(is.numeric), ~ dplyr::first(.)), across(where(is.numeric), ~ sum(.))) %>%
+  ungroup() %>%
+  as.data.frame()
+
+rownames(countdata) <- countdata$ENSG
+
+# Move gene info to separate dataframe and remove from count data
+annotation_table <- countdata %>%
+  dplyr::select(c(ENSG, GeneType, GeneSymbol)) %>%
+  as_tibble
+
+countdata <- countdata %>%
+  dplyr::select(-c(ENSG, GeneType, GeneSymbol))
+
+
+sampledata$celltype %<>% factor(levels = c("TLR10LOV", "wildtype"))
+sampledata$condition %<>% factor(levels = c("light", "dark"))
+sampledata$time %<>% factor(levels = c("3h", "16h"))
+sampledata$batch %<>% factor(levels = c("A", "B", "C"))
+# Merge variables to sample groups
+sampledata$group <- factor(paste(sampledata$celltype, sampledata$condition, sampledata$time, sep = "_"))
+
+summary(sampledata)
+
+```
+
+```{r check_sample_names}
+
+# Check if Sample names in countdata and sampledata match
+# otherwise reorder countdata accordingly
+if (!all(colnames(countdata) == sampledata$sampleID)) {
+  countdata = countdata[, sampledata$sampleID]
+}
+
+```
+
+# Run DESeq analysis
+
+```{r, run_DESeq}
+# Create DESeq dataset
+dds <- DESeqDataSetFromMatrix(countData = countdata, colData = sampledata, design = ~group)
+
+# Run DESeq analysis
+dds = DESeq(dds)
+normalized_counts = counts(dds, normalized = T)
+
+```
+
+## Overview and QC plots
+
+```{r DESeq_QC}
+
+# Dispersion plot for QC
+plotDispEsts(dds)
+
+# transform data with regularized log for visualization
+vsd <- vst(dds, blind = T)
+
+# Principal component analysis
+plotPCA(vsd, intgroup=c("group"))
+plotPCA(vsd, intgroup=c("celltype"))
+plotPCA(vsd, intgroup=c("condition"))
+plotPCA(vsd, intgroup=c("time"))
+plotPCA(vsd, intgroup=c("batch"))
+
+plotPCA(vsd, intgroup=c("celltype", "condition"))
+plotPCA(vsd, intgroup=c("celltype", "condition"), pcsToUse = 3:4)
+
+
+# Correlation heatmap
+samplecorr <- cor(assay(vsd))
+rownames(samplecorr) <- vsd$group
+
+anno_df <- as.data.frame(colData(dds)[, c("celltype", "condition", "time")], row.names = colnames(dds))
+
+pheatmap(samplecorr,
+         show_colnames = F,
+         annotation_col = anno_df,
+         show_rownames = T)
+
+```
+
+## Extract results from DESeq object
+
+```{r extract_results}
+
+res.TLR3h = results(dds, contrast = c("group", "TLR10LOV_light_3h", "TLR10LOV_dark_3h"), alpha = 0.05)
+res.TLR16h = results(dds, contrast = c("group", "TLR10LOV_light_16h", "TLR10LOV_dark_16h"), alpha = 0.05)
+res.TLRlightWT3h = results(dds, contrast = c("group", "TLR10LOV_light_3h", "wildtype_light_3h"), alpha = 0.05)
+res.TLRlightWT16h = results(dds, contrast = c("group", "TLR10LOV_light_16h", "wildtype_light_16h"), alpha = 0.05)
+res.TLRdarkWT3h = results(dds, contrast = c("group", "TLR10LOV_dark_3h", "wildtype_light_3h"), alpha = 0.05)
+res.TLRdarkWT16h = results(dds, contrast = c("group", "TLR10LOV_dark_16h", "wildtype_light_16h"), alpha = 0.05)
+
+plotMA(res.TLR3h, ylim=c(-2, 2), main = "TLR10LOV_light_3h vs TLR10LOV_dark_3h")
+plotMA(res.TLR16h, ylim=c(-2, 2), main = "TLR10LOV_light_16h vs TLR10LOV_dark_16h")
+plotMA(res.TLRlightWT3h, ylim=c(-2, 2), main = "TLR10LOV_light_3h vs wildtype_light_3h")
+plotMA(res.TLRlightWT16h, ylim=c(-2, 2), main = "TLR10LOV_light_16h vs wildtype_light_16h")
+plotMA(res.TLRdarkWT3h, ylim=c(-2, 2), main = "TLR10LOV_dark_3h vs wildtype_light_3h")
+plotMA(res.TLRdarkWT16h, ylim=c(-2, 2), main = "TLR10LOV_dark_16h vs wildtype_light_16h")
+
+print("TLR10LOV_light_3h vs TLR10LOV_dark_3h")
+summary(res.TLR3h)
+
+print("TLR10LOV_light_16h vs TLR10LOV_dark_16h")
+summary(res.TLR16h)
+
+print("TLR10LOV_light_3h vs wildtype_light_3h")
+summary(res.TLRlightWT3h)
+
+print("TLR10LOV_light_16h vs wildtype_light_16h")
+summary(res.TLRlightWT16h)
+
+print("TLR10LOV_dark_3h vs wildtype_light_3h")
+summary(res.TLRdarkWT3h)
+
+print("TLR10LOV_dark_16h vs wildtype_light_16h")
+summary(res.TLRdarkWT16h)
+
+```
+
+## Perform shrinkage
+
+```{r lfc_shrinkage}
+
+res.TLR3h <- lfcShrink(dds = dds, res = res.TLR3h, type = "ashr")
+res.TLR16h <- lfcShrink(dds = dds, res = res.TLR16h, type = "ashr")
+res.TLRlightWT3h <- lfcShrink(dds = dds, res = res.TLRlightWT3h, type = "ashr")
+res.TLRlightWT16h <- lfcShrink(dds = dds, res = res.TLRlightWT16h, type = "ashr")
+res.TLRdarkWT3h <- lfcShrink(dds = dds, res = res.TLRdarkWT3h, type = "ashr")
+res.TLRdarkWT16h <- lfcShrink(dds = dds, res = res.TLRdarkWT16h, type = "ashr")
+
+plotMA(res.TLR3h, ylim=c(-2, 2), main = "TLR10LOV_light_3h vs TLR10LOV_dark_3h")
+plotMA(res.TLR16h, ylim=c(-2, 2), main = "TLR10LOV_light_16h vs TLR10LOV_dark_16h")
+plotMA(res.TLRlightWT3h, ylim=c(-2, 2), main = "TLR10LOV_light_3h vs wildtype_light_3h")
+plotMA(res.TLRlightWT16h, ylim=c(-2, 2), main = "TLR10LOV_light_16h vs wildtype_light_16h")
+plotMA(res.TLRdarkWT3h, ylim=c(-2, 2), main = "TLR10LOV_dark_3h vs wildtype_light_3h")
+plotMA(res.TLRdarkWT16h, ylim=c(-2, 2), main = "TLR10LOV_dark_16h vs wildtype_light_16h")
+
+```
+
+# Results
+
+```{r plot_settings}
+
+## Counts plot
+
+countsToPlot <- c("TLR10")
+
+## Heatmaps
+
+hm_cluster_rows <- TRUE # Genes
+hm_cluster_cols <- TRUE # Samples
+hm_scale_by_row <- TRUE
+hm_max_rows <- 20
+
+heatmap.colors <- rev(brewer.pal(6, "RdBu")) # For possible color palettes, see 'brewer.pal.info'
+
+#Do not change:
+heatmap.annotation.col <- sampledata %>%
+  dplyr::select(sampleID, group) %>%
+  data.frame(row.names = "sampleID")
+
+## Volcano plot
+
+vp_max_labels <- 50
+vp_lfc_limit <- 4
+
+```
+
+## TLR10 expression levels (all samples)
+
+```{r TLR10_expression}
+
+for (gene in countsToPlot) {
+  p <- plotCounts(dds, gene = which(annotation_table$GeneSymbol == gene), intgroup = c("celltype", "condition", "time"), returnData = T)
+
+  p %<>% mutate(group = paste(celltype, condition, sep = ":")) %>%
+    group_by(group, time) %>%
+    summarise(mean_count = mean(count), sd_count = sd(count)) %>%
+    mutate(min_error = ifelse(mean_count - sd_count >= 0, mean_count - sd_count, 0), 
+           max_error = mean_count + sd_count)
+  
+  p <- ggplot(p, aes(x = group, y = mean_count, fill = time)) +
+    geom_col(position = "dodge") +
+    geom_errorbar(aes(ymin = min_error, ymax = max_error), position = position_dodge(0.9), width = 0.2) +
+    theme_bw() +
+    ggtitle(paste(gene, "Expression")) +
+    theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+  
+  print(p)
+}
+
+
+```
+
+## TLR10 3h light vs dark
+
+```{r TLR3h_filter_significance}
+
+res.TLR3h.tb <- res.TLR3h %>%
+  data.frame() %>%
+  rownames_to_column(var = "ENSG") %>%
+  as_tibble() %>%
+  right_join(annotation_table, ., by = "ENSG") %>%
+  mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
+  
+res.TLR3h.sig <- res.TLR3h.tb %>%
+  filter(threshold == TRUE)
+
+norm.TLR3h.sig <- normalized_counts %>%
+  data.frame() %>%
+  dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_3h", "TLR10LOV_dark_3h")]) %>%
+  filter(rownames(.) %in% res.TLR3h.sig$ENSG) 
+
+write.csv(res.TLR3h.tb %>% dplyr::select(-threshold), 
+          file = "results/DESeq/TLR10_light_3h_vs_TLR10_dark_3h_unfiltered.csv",
+          row.names = FALSE)
+write.csv(res.TLR3h.sig %>% dplyr::select(-threshold), 
+          file = "results/DESeq/TLR10_light_3h_vs_TLR10_dark_3h_filtered.csv",
+          row.names = FALSE)
+
+```
+
+
+```{r TLR3h_heatmap}
+if (nrow(norm.TLR3h.sig) <= hm_max_rows) {
+  
+  heatmap.annotation.row <- annotation_table %>%
+    filter(ENSG %in% rownames(norm.TLR3h.sig))
+  
+  pheatmap(norm.TLR3h.sig,
+         color = heatmap.colors,
+         cluster_rows = hm_cluster_rows,
+         cluster_cols = hm_cluster_cols,
+         annotation = heatmap.annotation.col,
+         labels_row = heatmap.annotation.row$GeneSymbol,
+         scale = ifelse(hm_scale_by_row, "row", "none"))
+  
+} else {
+  pheatmap(norm.TLR3h.sig,
+         color = heatmap.colors,
+         cluster_rows = hm_cluster_rows,
+         cluster_cols = hm_cluster_cols,
+         annotation = heatmap.annotation.col,
+         show_rownames = F,
+         scale = ifelse(hm_scale_by_row, "row", "none"))
+  
+  res.TLR3h.top <- res.TLR3h.sig %>%
+    arrange(padj) %>%
+    head(hm_max_rows)
+
+  norm.TLR3h.top <- normalized_counts %>%
+    data.frame() %>%
+    dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_3h", "TLR10LOV_dark_3h")]) %>%
+    filter(rownames(.) %in% res.TLR3h.top$ENSG) 
+  
+  heatmap.annotation.row <- annotation_table %>%
+    filter(ENSG %in% rownames(norm.TLR3h.top))
+  
+  pheatmap(norm.TLR3h.top,
+           color = heatmap.colors,
+           cluster_rows = hm_cluster_rows,
+           cluster_cols = hm_cluster_cols,
+           annotation = heatmap.annotation.col,
+           labels_row = heatmap.annotation.row$GeneSymbol,
+           scale = ifelse(hm_scale_by_row, "row", "none"))
+
+}
+
+
+```
+
+
+```{r TLR3h_volcanoplot}
+
+res.TLR3h.plot <- res.TLR3h.tb %>%
+  filter(!is.na(padj)) %>%
+  arrange(padj) %>%
+  mutate(genelabels = "", 
+         out_of_bounds = (abs(log2FoldChange) > vp_lfc_limit) * sign(log2FoldChange),
+         log2FoldChange_capped = ifelse(out_of_bounds != 0, vp_lfc_limit * sign(log2FoldChange), log2FoldChange))
+
+if (is.na(vp_max_labels) || sum(res.TLR3h.plot$threshold) < vp_max_labels) {
+  res.TLR3h.plot$genelabels[res.TLR3h.plot$threshold] <- res.TLR3h.plot$GeneSymbol[res.TLR3h.plot$threshold]
+} else {
+  res.TLR3h.plot$genelabels[res.TLR3h.plot$threshold][1:vp_max_labels] <- res.TLR3h.plot$GeneSymbol[res.TLR3h.plot$threshold][1:vp_max_labels]
+}
+
+maxFC <- max(abs(res.TLR3h.plot$log2FoldChange))
+if (vp_lfc_limit < maxFC) {
+  xlim <- vp_lfc_limit
+} else {
+  xlim <- maxFC * 1.04
+}
+
+ggplot(res.TLR3h.plot, aes(x = log2FoldChange_capped, y = padj)) +
+  geom_point(data = subset(res.TLR3h.plot, out_of_bounds == 0), aes(colour=threshold), alpha = 0.5) +
+  geom_point(data = subset(res.TLR3h.plot, out_of_bounds == -1), aes(colour=threshold), shape = "\u25c4", size=2) +
+  geom_point(data = subset(res.TLR3h.plot, out_of_bounds == 1), aes(colour=threshold), shape = "\u25BA", size=2) +
+  geom_hline(yintercept = 0.05, linetype = 2) +
+  geom_vline(xintercept = c(-0.58, 0.58), linetype = 2) +
+  geom_text_repel(aes(label = genelabels)) +
+  scale_x_continuous(breaks = scales::pretty_breaks(), limits = c(-xlim, xlim), expand = expansion(0.01)) +
+  scale_y_continuous(trans = c("log10", "reverse"), breaks = scales::trans_breaks("log10", function(x) 10^x)) +
+  ggtitle("TRL10LOV 3h light vs dark") +
+  xlab("log2 Fold Change") +
+  ylab("adjusted p-value") +
+  theme_pubr() +
+  theme(legend.position = "none")
+  
+
+```
+
+## TLR10 16h light vs dark
+
+```{r TLR16h_filter_significance}
+
+res.TLR16h.tb <- res.TLR16h %>%
+  data.frame() %>%
+  rownames_to_column(var = "ENSG") %>%
+  as_tibble() %>%
+  right_join(annotation_table, ., by = "ENSG") %>%
+  mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
+  
+res.TLR16h.sig <- res.TLR16h.tb %>%
+  filter(threshold == TRUE)
+
+norm.TLR16h.sig <- normalized_counts %>%
+  data.frame() %>%
+  dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_16h", "TLR10LOV_dark_16h")]) %>%
+  filter(rownames(.) %in% res.TLR16h.sig$ENSG) 
+
+write.csv(res.TLR16h.tb %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_light_16h_vs_TLR10_dark_16h_unfiltered.csv",
+          row.names = FALSE)
+write.csv(res.TLR16h.sig %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_light_16h_vs_TLR10_dark_16h_filtered.csv",
+          row.names = FALSE)
+
+```
+
+
+```{r TLR16h_heatmap}
+
+if (nrow(norm.TLR16h.sig) <= hm_max_rows) {
+  
+  heatmap.annotation.row <- annotation_table %>%
+    filter(ENSG %in% rownames(norm.TLR16h.sig))
+  
+  pheatmap(norm.TLR16h.sig,
+         color = heatmap.colors,
+         cluster_rows = hm_cluster_rows,
+         cluster_cols = hm_cluster_cols,
+         annotation = heatmap.annotation.col,
+         labels_row = heatmap.annotation.row$GeneSymbol,
+         scale = ifelse(hm_scale_by_row, "row", "none"))
+  
+} else {
+  pheatmap(norm.TLR16h.sig,
+         color = heatmap.colors,
+         cluster_rows = hm_cluster_rows,
+         cluster_cols = hm_cluster_cols,
+         annotation = heatmap.annotation.col,
+         show_rownames = F,
+         scale = ifelse(hm_scale_by_row, "row", "none"))
+  
+  res.TLR16h.top <- res.TLR16h.sig %>%
+    arrange(padj) %>%
+    head(hm_max_rows)
+
+  norm.TLR16h.top <- normalized_counts %>%
+    data.frame() %>%
+    dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_16h", "TLR10LOV_dark_16h")]) %>%
+    filter(rownames(.) %in% res.TLR16h.top$ENSG) 
+  
+  heatmap.annotation.row <- annotation_table %>%
+    filter(ENSG %in% rownames(norm.TLR16h.top))
+  
+  pheatmap(norm.TLR16h.top,
+           color = heatmap.colors,
+           cluster_rows = hm_cluster_rows,
+           cluster_cols = hm_cluster_cols,
+           annotation = heatmap.annotation.col,
+           labels_row = heatmap.annotation.row$GeneSymbol,
+           scale = ifelse(hm_scale_by_row, "row", "none"))
+
+}
+
+```
+
+
+```{r TLR16h_volcanoplot}
+
+res.TLR16h.plot <- res.TLR16h.tb %>%
+  filter(!is.na(padj)) %>%
+  arrange(padj) %>%
+  mutate(genelabels = "", 
+         out_of_bounds = (abs(log2FoldChange) > vp_lfc_limit) * sign(log2FoldChange),
+         log2FoldChange_capped = ifelse(out_of_bounds != 0, vp_lfc_limit * sign(log2FoldChange), log2FoldChange))
+
+if (is.na(vp_max_labels) || sum(res.TLR16h.plot$threshold) < vp_max_labels) {
+  res.TLR16h.plot$genelabels[res.TLR16h.plot$threshold] <- res.TLR16h.plot$GeneSymbol[res.TLR16h.plot$threshold]
+} else {
+  res.TLR16h.plot$genelabels[res.TLR16h.plot$threshold][1:vp_max_labels] <- res.TLR16h.plot$GeneSymbol[res.TLR16h.plot$threshold][1:vp_max_labels]
+}
+
+maxFC <- max(abs(res.TLR16h.plot$log2FoldChange))
+if (vp_lfc_limit < maxFC) {
+  xlim <- vp_lfc_limit
+} else {
+  xlim <- maxFC * 1.04
+}
+
+ggplot(res.TLR16h.plot, aes(x = log2FoldChange_capped, y = padj)) +
+  geom_point(data = subset(res.TLR16h.plot, out_of_bounds == 0), aes(colour=threshold), alpha = 0.5) +
+  geom_point(data = subset(res.TLR16h.plot, out_of_bounds == -1), aes(colour=threshold), shape = "\u25c4", size=2) +
+  geom_point(data = subset(res.TLR16h.plot, out_of_bounds == 1), aes(colour=threshold), shape = "\u25BA", size=2) +
+  geom_hline(yintercept = 0.05, linetype = 2) +
+  geom_vline(xintercept = c(-0.58, 0.58), linetype = 2) +
+  geom_text_repel(aes(label = genelabels)) +
+  scale_x_continuous(breaks = scales::pretty_breaks(), limits = c(-xlim, xlim), expand = expansion(0.01)) +
+  scale_y_continuous(trans = c("log10", "reverse"), breaks = scales::trans_breaks("log10", function(x) 10^x)) +
+  ggtitle("TRL10LOV 16h light vs dark") +
+  xlab("log2 Fold Change") +
+  ylab("adjusted p-value") +
+  theme_pubr() +
+  theme(legend.position = "none")
+  
+
+```
+
+## TLR10 light vs wildtype 3h
+
+```{r TLRlightWT3h_filter_significance}
+
+res.TLRlightWT3h.tb <- res.TLRlightWT3h %>%
+  data.frame() %>%
+  rownames_to_column(var = "ENSG") %>%
+  as_tibble() %>%
+  right_join(annotation_table, ., by = "ENSG") %>%
+  mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
+  
+res.TLRlightWT3h.sig <- res.TLRlightWT3h.tb %>%
+  filter(threshold == TRUE)
+
+norm.TLRlightWT3h.sig <- normalized_counts %>%
+  data.frame() %>%
+  dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_3h", "wildtype_light_3h")]) %>%
+  filter(rownames(.) %in% res.TLRlightWT3h.sig$ENSG) 
+
+write.csv(res.TLRlightWT3h.tb %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_light_3h_vs_wildtype_light_3h_unfiltered.csv",
+          row.names = FALSE)
+write.csv(res.TLRlightWT3h.sig %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_light_3h_vs_wildtype_light_3h_filtered.csv",
+          row.names = FALSE)
+
+```
+
+
+```{r TLRlightWT3h_heatmap}
+
+if (nrow(norm.TLRlightWT3h.sig) <= hm_max_rows) {
+  
+  heatmap.annotation.row <- annotation_table %>%
+    filter(ENSG %in% rownames(norm.TLRlightWT3h.sig))
+  
+  pheatmap(norm.TLRlightWT3h.sig,
+         color = heatmap.colors,
+         cluster_rows = hm_cluster_rows,
+         cluster_cols = hm_cluster_cols,
+         annotation = heatmap.annotation.col,
+         labels_row = heatmap.annotation.row$GeneSymbol,
+         scale = ifelse(hm_scale_by_row, "row", "none"))
+  
+} else {
+  pheatmap(norm.TLRlightWT3h.sig,
+         color = heatmap.colors,
+         cluster_rows = hm_cluster_rows,
+         cluster_cols = hm_cluster_cols,
+         annotation = heatmap.annotation.col,
+         show_rownames = F,
+         scale = ifelse(hm_scale_by_row, "row", "none"))
+  
+  res.TLRlightWT3h.top <- res.TLRlightWT3h.sig %>%
+    arrange(padj) %>%
+    head(hm_max_rows)
+
+  norm.TLRlightWT3h.top <- normalized_counts %>%
+    data.frame() %>%
+    dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_3h", "wildtype_light_3h")]) %>%
+    filter(rownames(.) %in% res.TLRlightWT3h.top$ENSG) 
+  
+  heatmap.annotation.row <- annotation_table %>%
+    filter(ENSG %in% rownames(norm.TLRlightWT3h.top))
+  
+  pheatmap(norm.TLRlightWT3h.top,
+           color = heatmap.colors,
+           cluster_rows = hm_cluster_rows,
+           cluster_cols = hm_cluster_cols,
+           annotation = heatmap.annotation.col,
+           labels_row = heatmap.annotation.row$GeneSymbol,
+           scale = ifelse(hm_scale_by_row, "row", "none"))
+
+}
+
+```
+
+
+```{r TLRlightWT3h_volcanoplot}
+
+res.TLRlightWT3h.plot <- res.TLRlightWT3h.tb %>%
+  filter(!is.na(padj)) %>%
+  arrange(padj) %>%
+  mutate(genelabels = "", 
+         out_of_bounds = (abs(log2FoldChange) > vp_lfc_limit) * sign(log2FoldChange),
+         log2FoldChange_capped = ifelse(out_of_bounds != 0, vp_lfc_limit * sign(log2FoldChange), log2FoldChange))
+
+if (is.na(vp_max_labels) || sum(res.TLRlightWT3h.plot$threshold) < vp_max_labels) {
+  res.TLRlightWT3h.plot$genelabels[res.TLRlightWT3h.plot$threshold] <- res.TLRlightWT3h.plot$GeneSymbol[res.TLRlightWT3h.plot$threshold]
+} else {
+  res.TLRlightWT3h.plot$genelabels[res.TLRlightWT3h.plot$threshold][1:vp_max_labels] <- res.TLRlightWT3h.plot$GeneSymbol[res.TLRlightWT3h.plot$threshold][1:vp_max_labels]
+}
+
+maxFC <- max(abs(res.TLRlightWT3h.plot$log2FoldChange))
+if (vp_lfc_limit < maxFC) {
+  xlim <- vp_lfc_limit
+} else {
+  xlim <- maxFC * 1.04
+}
+
+ggplot(res.TLRlightWT3h.plot, aes(x = log2FoldChange_capped, y = padj)) +
+  geom_point(data = subset(res.TLRlightWT3h.plot, out_of_bounds == 0), aes(colour=threshold), alpha = 0.5) +
+  geom_point(data = subset(res.TLRlightWT3h.plot, out_of_bounds == -1), aes(colour=threshold), shape = "\u25c4", size=2) +
+  geom_point(data = subset(res.TLRlightWT3h.plot, out_of_bounds == 1), aes(colour=threshold), shape = "\u25BA", size=2) +
+  geom_hline(yintercept = 0.05, linetype = 2) +
+  geom_vline(xintercept = c(-0.58, 0.58), linetype = 2) +
+  geom_text_repel(aes(label = genelabels)) +
+  scale_x_continuous(breaks = scales::pretty_breaks(), limits = c(-xlim, xlim), expand = expansion(0.01)) +
+  scale_y_continuous(trans = c("log10", "reverse"), breaks = scales::trans_breaks("log10", function(x) 10^x)) +
+  ggtitle("TRL10LOV 3h light vs wildtype 3h light") +
+  xlab("log2 Fold Change") +
+  ylab("adjusted p-value") +
+  theme_pubr() +
+  theme(legend.position = "none")
+  
+
+```
+
+## TLR10 light vs wildtype 16h
+
+```{r TLRlightWT16h_filter_significance}
+
+res.TLRlightWT16h.tb <- res.TLRlightWT16h %>%
+  data.frame() %>%
+  rownames_to_column(var = "ENSG") %>%
+  as_tibble() %>%
+  right_join(annotation_table, ., by = "ENSG") %>%
+  mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
+  
+res.TLRlightWT16h.sig <- res.TLRlightWT16h.tb %>%
+  filter(threshold == TRUE)
+
+norm.TLRlightWT16h.sig <- normalized_counts %>%
+  data.frame() %>%
+  dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_16h", "wildtype_light_16h")]) %>%
+  filter(rownames(.) %in% res.TLRlightWT16h.sig$ENSG)
+
+write.csv(res.TLRlightWT16h.tb %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_light_16h_vs_wildtype_light_16h_unfiltered.csv",
+          row.names = FALSE)
+write.csv(res.TLRlightWT16h.sig %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_light_16h_vs_wildtype_light_16h_filtered.csv",
+          row.names = FALSE)
+
+```
+
+
+```{r TLRlightWT16h_heatmap}
+
+if (nrow(norm.TLRlightWT16h.sig) <= hm_max_rows) {
+  
+  heatmap.annotation.row <- annotation_table %>%
+    filter(ENSG %in% rownames(norm.TLRlightWT16h.sig))
+  
+  pheatmap(norm.TLRlightWT16h.sig,
+         color = heatmap.colors,
+         cluster_rows = hm_cluster_rows,
+         cluster_cols = hm_cluster_cols,
+         annotation = heatmap.annotation.col,
+         labels_row = heatmap.annotation.row$GeneSymbol,
+         scale = ifelse(hm_scale_by_row, "row", "none"))
+  
+} else {
+  pheatmap(norm.TLRlightWT16h.sig,
+         color = heatmap.colors,
+         cluster_rows = hm_cluster_rows,
+         cluster_cols = hm_cluster_cols,
+         annotation = heatmap.annotation.col,
+         show_rownames = F,
+         scale = ifelse(hm_scale_by_row, "row", "none"))
+  
+  res.TLRlightWT16h.top <- res.TLRlightWT16h.sig %>%
+    arrange(padj) %>%
+    head(hm_max_rows)
+
+  norm.TLRlightWT16h.top <- normalized_counts %>%
+    data.frame() %>%
+    dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_16h", "wildtype_light_16h")]) %>%
+    filter(rownames(.) %in% res.TLRlightWT16h.top$ENSG) 
+  
+  heatmap.annotation.row <- annotation_table %>%
+    filter(ENSG %in% rownames(norm.TLRlightWT16h.top))
+  
+  pheatmap(norm.TLRlightWT16h.top,
+           color = heatmap.colors,
+           cluster_rows = hm_cluster_rows,
+           cluster_cols = hm_cluster_cols,
+           annotation = heatmap.annotation.col,
+           labels_row = heatmap.annotation.row$GeneSymbol,
+           scale = ifelse(hm_scale_by_row, "row", "none"))
+
+}
+
+```
+
+
+```{r TLRlightWT16h_volcanoplot}
+
+res.TLRlightWT16h.plot <- res.TLRlightWT16h.tb %>%
+  filter(!is.na(padj)) %>%
+  arrange(padj) %>%
+  mutate(genelabels = "", 
+         out_of_bounds = (abs(log2FoldChange) > vp_lfc_limit) * sign(log2FoldChange),
+         log2FoldChange_capped = ifelse(out_of_bounds != 0, vp_lfc_limit * sign(log2FoldChange), log2FoldChange))
+
+if (is.na(vp_max_labels) || sum(res.TLRlightWT16h.plot$threshold) < vp_max_labels) {
+  res.TLRlightWT16h.plot$genelabels[res.TLRlightWT16h.plot$threshold] <- res.TLRlightWT16h.plot$GeneSymbol[res.TLRlightWT16h.plot$threshold]
+} else {
+  res.TLRlightWT16h.plot$genelabels[res.TLRlightWT16h.plot$threshold][1:vp_max_labels] <- res.TLRlightWT16h.plot$GeneSymbol[res.TLRlightWT16h.plot$threshold][1:vp_max_labels]
+}
+
+maxFC <- max(abs(res.TLRlightWT16h.plot$log2FoldChange))
+if (vp_lfc_limit < maxFC) {
+  xlim <- vp_lfc_limit
+} else {
+  xlim <- maxFC * 1.04
+}
+
+ggplot(res.TLRlightWT16h.plot, aes(x = log2FoldChange_capped, y = padj)) +
+  geom_point(data = subset(res.TLRlightWT16h.plot, out_of_bounds == 0), aes(colour=threshold), alpha = 0.5) +
+  geom_point(data = subset(res.TLRlightWT16h.plot, out_of_bounds == -1), aes(colour=threshold), shape = "\u25c4", size=2) +
+  geom_point(data = subset(res.TLRlightWT16h.plot, out_of_bounds == 1), aes(colour=threshold), shape = "\u25BA", size=2) +
+  geom_hline(yintercept = 0.05, linetype = 2) +
+  geom_vline(xintercept = c(-0.58, 0.58), linetype = 2) +
+  geom_text_repel(aes(label = genelabels)) +
+  scale_x_continuous(breaks = scales::pretty_breaks(), limits = c(-xlim, xlim), expand = expansion(0.01)) +
+  scale_y_continuous(trans = c("log10", "reverse"), breaks = scales::trans_breaks("log10", function(x) 10^x)) +
+  ggtitle("TRL10LOV 16h light vs wildtype 16h light") +
+  xlab("log2 Fold Change") +
+  ylab("adjusted p-value") +
+  theme_pubr() +
+  theme(legend.position = "none")
+  
+
+```
+
+
+## TLR10 dark vs wildtype 3h
+
+```{r TLRdarkWT3h_filter_significance}
+
+res.TLRdarkWT3h.tb <- res.TLRdarkWT3h %>%
+  data.frame() %>%
+  rownames_to_column(var = "ENSG") %>%
+  as_tibble() %>%
+  right_join(annotation_table, ., by = "ENSG") %>%
+  mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
+  
+res.TLRdarkWT3h.sig <- res.TLRdarkWT3h.tb %>%
+  filter(threshold == TRUE)
+
+norm.TLRdarkWT3h.sig <- normalized_counts %>%
+  data.frame() %>%
+  dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_dark_3h", "wildtype_light_3h")]) %>%
+  filter(rownames(.) %in% res.TLRdarkWT3h.sig$ENSG) 
+
+write.csv(res.TLRdarkWT3h.tb %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_dark_3h_vs_wildtype_light_3h_unfiltered.csv",
+          row.names = FALSE)
+write.csv(res.TLRdarkWT3h.sig %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_dark_3h_vs_wildtype_light_3h_filtered.csv",
+          row.names = FALSE)
+
+```
+
+
+```{r TLRdarkWT3h_heatmap}
+
+if (nrow(norm.TLRdarkWT3h.sig) <= hm_max_rows) {
+  
+  heatmap.annotation.row <- annotation_table %>%
+    filter(ENSG %in% rownames(norm.TLRdarkWT3h.sig))
+  
+  pheatmap(norm.TLRdarkWT3h.sig,
+         color = heatmap.colors,
+         cluster_rows = hm_cluster_rows,
+         cluster_cols = hm_cluster_cols,
+         annotation = heatmap.annotation.col,
+         labels_row = heatmap.annotation.row$GeneSymbol,
+         scale = ifelse(hm_scale_by_row, "row", "none"))
+  
+} else {
+  pheatmap(norm.TLRdarkWT3h.sig,
+         color = heatmap.colors,
+         cluster_rows = hm_cluster_rows,
+         cluster_cols = hm_cluster_cols,
+         annotation = heatmap.annotation.col,
+         show_rownames = F,
+         scale = ifelse(hm_scale_by_row, "row", "none"))
+  
+  res.TLRdarkWT3h.top <- res.TLRdarkWT3h.sig %>%
+    arrange(padj) %>%
+    head(hm_max_rows)
+
+  norm.TLRdarkWT3h.top <- normalized_counts %>%
+    data.frame() %>%
+    dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_dark_3h", "wildtype_light_3h")]) %>%
+    filter(rownames(.) %in% res.TLRdarkWT3h.top$ENSG) 
+  
+  heatmap.annotation.row <- annotation_table %>%
+    filter(ENSG %in% rownames(norm.TLRdarkWT3h.top))
+  
+  pheatmap(norm.TLRdarkWT3h.top,
+           color = heatmap.colors,
+           cluster_rows = hm_cluster_rows,
+           cluster_cols = hm_cluster_cols,
+           annotation = heatmap.annotation.col,
+           labels_row = heatmap.annotation.row$GeneSymbol,
+           scale = ifelse(hm_scale_by_row, "row", "none"))
+
+}
+
+```
+
+
+```{r TLRdarkWT3h_volcanoplot}
+
+res.TLRdarkWT3h.plot <- res.TLRdarkWT3h.tb %>%
+  filter(!is.na(padj)) %>%
+  arrange(padj) %>%
+  mutate(genelabels = "", 
+         out_of_bounds = (abs(log2FoldChange) > vp_lfc_limit) * sign(log2FoldChange),
+         log2FoldChange_capped = ifelse(out_of_bounds != 0, vp_lfc_limit * sign(log2FoldChange), log2FoldChange))
+
+if (is.na(vp_max_labels) || sum(res.TLRdarkWT3h.plot$threshold) < vp_max_labels) {
+  res.TLRdarkWT3h.plot$genelabels[res.TLRdarkWT3h.plot$threshold] <- res.TLRdarkWT3h.plot$GeneSymbol[res.TLRdarkWT3h.plot$threshold]
+} else {
+  res.TLRdarkWT3h.plot$genelabels[res.TLRdarkWT3h.plot$threshold][1:vp_max_labels] <- res.TLRdarkWT3h.plot$GeneSymbol[res.TLRdarkWT3h.plot$threshold][1:vp_max_labels]
+}
+
+maxFC <- max(abs(res.TLRdarkWT3h.plot$log2FoldChange))
+if (vp_lfc_limit < maxFC) {
+  xlim <- vp_lfc_limit
+} else {
+  xlim <- maxFC * 1.04
+}
+
+ggplot(res.TLRdarkWT3h.plot, aes(x = log2FoldChange_capped, y = padj)) +
+  geom_point(data = subset(res.TLRdarkWT3h.plot, out_of_bounds == 0), aes(colour=threshold), alpha = 0.5) +
+  geom_point(data = subset(res.TLRdarkWT3h.plot, out_of_bounds == -1), aes(colour=threshold), shape = "\u25c4", size=2) +
+  geom_point(data = subset(res.TLRdarkWT3h.plot, out_of_bounds == 1), aes(colour=threshold), shape = "\u25BA", size=2) +
+  geom_hline(yintercept = 0.05, linetype = 2) +
+  geom_vline(xintercept = c(-0.58, 0.58), linetype = 2) +
+  geom_text_repel(aes(label = genelabels)) +
+  scale_x_continuous(breaks = scales::pretty_breaks(), limits = c(-xlim, xlim), expand = expansion(0.01)) +
+  scale_y_continuous(trans = c("log10", "reverse"), breaks = scales::trans_breaks("log10", function(x) 10^x)) +
+  ggtitle("TRL10LOV 3h dark vs wildtype 3h light") +
+  xlab("log2 Fold Change") +
+  ylab("adjusted p-value") +
+  theme_pubr() +
+  theme(legend.position = "none")
+  
+
+```
+
+## TLR10 dark vs wildtype 16h
+
+```{r TLRdarkWT16h_filter_significance}
+
+res.TLRdarkWT16h.tb <- res.TLRdarkWT16h %>%
+  data.frame() %>%
+  rownames_to_column(var = "ENSG") %>%
+  as_tibble() %>%
+  right_join(annotation_table, ., by = "ENSG") %>%
+  mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
+  
+res.TLRdarkWT16h.sig <- res.TLRdarkWT16h.tb %>%
+  filter(threshold == TRUE)
+
+norm.TLRdarkWT16h.sig <- normalized_counts %>%
+  data.frame() %>%
+  dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_dark_16h", "wildtype_light_16h")]) %>%
+  filter(rownames(.) %in% res.TLRdarkWT16h.sig$ENSG)
+
+write.csv(res.TLRdarkWT16h.tb %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_dark_16h_vs_wildtype_light_16h_unfiltered.csv",
+          row.names = FALSE)
+write.csv(res.TLRdarkWT16h.sig %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_dark_16h_vs_wildtype_light_16h_filtered.csv",
+          row.names = FALSE)
+
+```
+
+
+```{r TLRdarkWT16h_heatmap}
+
+if (nrow(norm.TLRdarkWT16h.sig) <= hm_max_rows) {
+  
+  heatmap.annotation.row <- annotation_table %>%
+    filter(ENSG %in% rownames(norm.TLRdarkWT16h.sig))
+  
+  pheatmap(norm.TLRdarkWT16h.sig,
+         color = heatmap.colors,
+         cluster_rows = hm_cluster_rows,
+         cluster_cols = hm_cluster_cols,
+         annotation = heatmap.annotation.col,
+         labels_row = heatmap.annotation.row$GeneSymbol,
+         scale = ifelse(hm_scale_by_row, "row", "none"))
+  
+} else {
+  pheatmap(norm.TLRdarkWT16h.sig,
+         color = heatmap.colors,
+         cluster_rows = hm_cluster_rows,
+         cluster_cols = hm_cluster_cols,
+         annotation = heatmap.annotation.col,
+         show_rownames = F,
+         scale = ifelse(hm_scale_by_row, "row", "none"))
+  
+  res.TLRdarkWT16h.top <- res.TLRdarkWT16h.sig %>%
+    arrange(padj) %>%
+    head(hm_max_rows)
+
+  norm.TLRdarkWT16h.top <- normalized_counts %>%
+    data.frame() %>%
+    dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_dark_16h", "wildtype_light_16h")]) %>%
+    filter(rownames(.) %in% res.TLRdarkWT16h.top$ENSG) 
+  
+  heatmap.annotation.row <- annotation_table %>%
+    filter(ENSG %in% rownames(norm.TLRdarkWT16h.top))
+  
+  pheatmap(norm.TLRdarkWT16h.top,
+           color = heatmap.colors,
+           cluster_rows = hm_cluster_rows,
+           cluster_cols = hm_cluster_cols,
+           annotation = heatmap.annotation.col,
+           labels_row = heatmap.annotation.row$GeneSymbol,
+           scale = ifelse(hm_scale_by_row, "row", "none"))
+
+}
+
+```
+
+
+```{r TLRdarkWT16h_volcanoplot}
+
+res.TLRdarkWT16h.plot <- res.TLRdarkWT16h.tb %>%
+  filter(!is.na(padj)) %>%
+  arrange(padj) %>%
+  mutate(genelabels = "", 
+         out_of_bounds = (abs(log2FoldChange) > vp_lfc_limit) * sign(log2FoldChange),
+         log2FoldChange_capped = ifelse(out_of_bounds != 0, vp_lfc_limit * sign(log2FoldChange), log2FoldChange))
+
+if (is.na(vp_max_labels) || sum(res.TLRdarkWT16h.plot$threshold) < vp_max_labels) {
+  res.TLRdarkWT16h.plot$genelabels[res.TLRdarkWT16h.plot$threshold] <- res.TLRdarkWT16h.plot$GeneSymbol[res.TLRdarkWT16h.plot$threshold]
+} else {
+  res.TLRdarkWT16h.plot$genelabels[res.TLRdarkWT16h.plot$threshold][1:vp_max_labels] <- res.TLRdarkWT16h.plot$GeneSymbol[res.TLRdarkWT16h.plot$threshold][1:vp_max_labels]
+}
+
+maxFC <- max(abs(res.TLRdarkWT16h.plot$log2FoldChange))
+if (vp_lfc_limit < maxFC) {
+  xlim <- vp_lfc_limit
+} else {
+  xlim <- maxFC * 1.04
+}
+
+ggplot(res.TLRdarkWT16h.plot, aes(x = log2FoldChange_capped, y = padj)) +
+  geom_point(data = subset(res.TLRdarkWT16h.plot, out_of_bounds == 0), aes(colour=threshold), alpha = 0.5) +
+  geom_point(data = subset(res.TLRdarkWT16h.plot, out_of_bounds == -1), aes(colour=threshold), shape = "\u25c4", size=2) +
+  geom_point(data = subset(res.TLRdarkWT16h.plot, out_of_bounds == 1), aes(colour=threshold), shape = "\u25BA", size=2) +
+  geom_hline(yintercept = 0.05, linetype = 2) +
+  geom_vline(xintercept = c(-0.58, 0.58), linetype = 2) +
+  geom_text_repel(aes(label = genelabels)) +
+  scale_x_continuous(breaks = scales::pretty_breaks(), limits = c(-xlim, xlim), expand = expansion(0.01)) +
+  scale_y_continuous(trans = c("log10", "reverse"), breaks = scales::trans_breaks("log10", function(x) 10^x)) +
+  ggtitle("TRL10LOV 16h dark vs wildtype 16h light") +
+  xlab("log2 Fold Change") +
+  ylab("adjusted p-value") +
+  theme_pubr() +
+  theme(legend.position = "none")
+  
+
+```
