@@ -71,7 +71,6 @@ annotation_table <- countdata %>%
 countdata <- countdata %>%
   dplyr::select(-c(ENSG, GeneType, GeneSymbol))
 
-
 sampledata$celltype %<>% factor(levels = c("TLR10LOV", "wildtype"))
 sampledata$condition %<>% factor(levels = c("light", "dark"))
 sampledata$time %<>% factor(levels = c("3h", "16h"))
