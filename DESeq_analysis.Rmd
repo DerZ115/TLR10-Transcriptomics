@@ -8,25 +8,9 @@ output:
 ---
 # Setup
 
-## Load libraries
+```{r setup}
 
-```{r load_libraries, message=F, warning=F}
-
-library(DESeq2)
-library(dplyr)
-library(magrittr)
-library(pheatmap)
-library(tidyverse)
-library(RColorBrewer)
-library(stringr)
-library(ggplot2)
-library(ggrepel)
-library(ggpubr)
-library(org.Hs.eg.db)
-
-```
-
-```{r misc_setup}
+source("R/helpers.R")
 
 dir.create("results/DESeq", showWarnings = F, recursive = T)
 
@@ -34,61 +18,38 @@ knitr::opts_chunk$set(fig.width = 10, dpi = 300, results = "hold", fig.show = "h
 
 ```
 
+```{r plot_settings}
+
+## Counts plot
+
+counts_to_plot <- c("TLR10")
+
+## Heatmaps
+
+hm_cluster_rows <- TRUE # Genes
+hm_cluster_cols <- TRUE # Samples
+hm_scale_by_row <- TRUE
+hm_max_rows <- 20
+
+heatmap.colors <- rev(brewer.pal(6, "RdBu")) # For possible color palettes, see 'brewer.pal.info'
+
+## Volcano plot
+
+vp_max_labels <- 50
+vp_lfc_limit <- 4
+
+```
+
 ## Import data
 
 ```{r import_data}
 
-# Read main counts table 
-countdata <- read.delim("DE/full/Stierschneider_18samples_raw_gene_counts_GeneSymbols_GeneTypes.tsv")
-
-# Read sample info table
-sampledata <- read.csv("samples.csv") %>% as_tibble()
-
-```
-
-## Prepare data for analysis
-
-```{r, prepare_data}
-
-countdata %<>% 
-  # Remove genes with all zero counts
-  filter(rowSums(.[, sapply(., is.numeric)]) > 0) %>% 
-  # Remove version from ENSEMBL id, as it interferes with annotation
-  mutate(ENSG = str_remove(ENSG, "\\..*$")) %>% 
-  # Merge duplicate entries
-  group_by(ENSG) %>%
-  summarise(across(!where(is.numeric), ~ dplyr::first(.)), across(where(is.numeric), ~ sum(.))) %>%
-  ungroup() %>%
-  as.data.frame()
-
-rownames(countdata) <- countdata$ENSG
-
-# Move gene info to separate dataframe and remove from count data
-annotation_table <- countdata %>%
-  dplyr::select(c(ENSG, GeneType, GeneSymbol)) %>%
-  as_tibble
-
-countdata <- countdata %>%
-  dplyr::select(-c(ENSG, GeneType, GeneSymbol))
-
-sampledata$celltype %<>% factor(levels = c("TLR10LOV", "wildtype"))
-sampledata$condition %<>% factor(levels = c("light", "dark"))
-sampledata$time %<>% factor(levels = c("3h", "16h"))
-sampledata$batch %<>% factor(levels = c("A", "B", "C"))
-# Merge variables to sample groups
-sampledata$group <- factor(paste(sampledata$celltype, sampledata$condition, sampledata$time, sep = "_"))
-
-summary(sampledata)
-
-```
-
-```{r check_sample_names}
-
-# Check if Sample names in countdata and sampledata match
-# otherwise reorder countdata accordingly
-if (!all(colnames(countdata) == sampledata$sampleID)) {
-  countdata = countdata[, sampledata$sampleID]
-}
+data <- import_data("data/Stierschneider_18samples_raw_gene_counts_GeneSymbols_GeneTypes.tsv", 
+                    "data/samples.csv",
+                    list(celltype = c("TLR10LOV", "wildtype"),
+                         condition = c("light", "dark"),
+                         time = c("3h", "16h"),
+                         batch = c("A", "B", "C")))
 
 ```
 
@@ -96,7 +57,8 @@ if (!all(colnames(countdata) == sampledata$sampleID)) {
 
 ```{r, run_DESeq}
 # Create DESeq dataset
-dds <- DESeqDataSetFromMatrix(countData = countdata, colData = sampledata, design = ~group)
+dds <- DESeqDataSetFromMatrix(countData = data$count_data, 
+                              colData = data$sample_data, design = ~group)
 
 # Run DESeq analysis
 dds = DESeq(dds)
@@ -198,56 +160,39 @@ plotMA(res.TLRdarkWT16h, ylim=c(-2, 2), main = "TLR10LOV_dark_16h vs wildtype_li
 
 # Results
 
-```{r plot_settings}
-
-## Counts plot
-
-countsToPlot <- c("TLR10")
-
-## Heatmaps
-
-hm_cluster_rows <- TRUE # Genes
-hm_cluster_cols <- TRUE # Samples
-hm_scale_by_row <- TRUE
-hm_max_rows <- 20
-
-heatmap.colors <- rev(brewer.pal(6, "RdBu")) # For possible color palettes, see 'brewer.pal.info'
+```{r}
 
 #Do not change:
-heatmap.annotation.col <- sampledata %>%
+heatmap.annotation.col <- data$sample_data %>%
   dplyr::select(sampleID, group) %>%
   data.frame(row.names = "sampleID")
 
-## Volcano plot
-
-vp_max_labels <- 50
-vp_lfc_limit <- 4
-
 ```
 
-## TLR10 expression levels (all samples)
 
-```{r TLR10_expression}
+## Expression levels (all samples)
 
-for (gene in countsToPlot) {
-  p <- plotCounts(dds, gene = which(annotation_table$GeneSymbol == gene), intgroup = c("celltype", "condition", "time"), returnData = T)
+```{r expression_levels}
 
-  p %<>% mutate(group = paste(celltype, condition, sep = ":")) %>%
-    group_by(group, time) %>%
-    summarise(mean_count = mean(count), sd_count = sd(count)) %>%
-    mutate(min_error = ifelse(mean_count - sd_count >= 0, mean_count - sd_count, 0), 
+counts.plot <- lapply(counts_to_plot, function(x) {
+  plotCounts(dds, data$annotation_data[data$annotation_data$GeneSymbol == x,]$ENSG,
+              intgroup = c("celltype", "condition", "time"), returnData = TRUE)
+  }) %>%
+  set_names(counts_to_plot) %>%
+  lapply(rownames_to_column, var = "Sample_ID") %>%
+  bind_rows(.id = "GeneSymbol") %>%
+  group_by(GeneSymbol, celltype, condition, time) %>%
+  summarise(mean_count = mean(count), sd_count = sd(count), .groups = "drop") %>%
+  mutate(min_error = ifelse(mean_count - sd_count >= 0, mean_count - sd_count, 0), 
            max_error = mean_count + sd_count)
-  
-  p <- ggplot(p, aes(x = group, y = mean_count, fill = time)) +
-    geom_col(position = "dodge") +
-    geom_errorbar(aes(ymin = min_error, ymax = max_error), position = position_dodge(0.9), width = 0.2) +
-    theme_bw() +
-    ggtitle(paste(gene, "Expression")) +
-    theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
-  
-  print(p)
-}
 
+ggplot(counts.plot, aes(x = interaction(celltype, condition, sep=":", lex.order = T), y = mean_count, fill = time)) +
+  geom_col(position = "dodge") +
+  geom_errorbar(aes(ymin = min_error, ymax = max_error), 
+                position = position_dodge(0.9), width = 0.2) +
+  labs(x = "", y = "Mean Count", fill = "", title = "TLR10 Expression") +
+  theme_pubr() +
+  theme(legend.position = "right", legend.text = element_text(size = 12), panel.grid.major.y = element_line(linewidth = 0.5))
 
 ```
 
@@ -259,7 +204,7 @@ res.TLR3h.tb <- res.TLR3h %>%
   data.frame() %>%
   rownames_to_column(var = "ENSG") %>%
   as_tibble() %>%
-  right_join(annotation_table, ., by = "ENSG") %>%
+  right_join(data$annotation_data, ., by = "ENSG") %>%
   mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
   
 res.TLR3h.sig <- res.TLR3h.tb %>%
@@ -267,7 +212,7 @@ res.TLR3h.sig <- res.TLR3h.tb %>%
 
 norm.TLR3h.sig <- normalized_counts %>%
   data.frame() %>%
-  dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_3h", "TLR10LOV_dark_3h")]) %>%
+  dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_light_3h", "TLR10LOV_dark_3h")]) %>%
   filter(rownames(.) %in% res.TLR3h.sig$ENSG) 
 
 write.csv(res.TLR3h.tb %>% dplyr::select(-threshold), 
@@ -283,7 +228,7 @@ write.csv(res.TLR3h.sig %>% dplyr::select(-threshold),
 ```{r TLR3h_heatmap}
 if (nrow(norm.TLR3h.sig) <= hm_max_rows) {
   
-  heatmap.annotation.row <- annotation_table %>%
+  heatmap.annotation.row <- data$annotation_data %>%
     filter(ENSG %in% rownames(norm.TLR3h.sig))
   
   pheatmap(norm.TLR3h.sig,
@@ -309,10 +254,10 @@ if (nrow(norm.TLR3h.sig) <= hm_max_rows) {
 
   norm.TLR3h.top <- normalized_counts %>%
     data.frame() %>%
-    dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_3h", "TLR10LOV_dark_3h")]) %>%
+    dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_light_3h", "TLR10LOV_dark_3h")]) %>%
     filter(rownames(.) %in% res.TLR3h.top$ENSG) 
   
-  heatmap.annotation.row <- annotation_table %>%
+  heatmap.annotation.row <- data$annotation_data %>%
     filter(ENSG %in% rownames(norm.TLR3h.top))
   
   pheatmap(norm.TLR3h.top,
@@ -377,7 +322,7 @@ res.TLR16h.tb <- res.TLR16h %>%
   data.frame() %>%
   rownames_to_column(var = "ENSG") %>%
   as_tibble() %>%
-  right_join(annotation_table, ., by = "ENSG") %>%
+  right_join(data$annotation_data, ., by = "ENSG") %>%
   mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
   
 res.TLR16h.sig <- res.TLR16h.tb %>%
@@ -385,7 +330,7 @@ res.TLR16h.sig <- res.TLR16h.tb %>%
 
 norm.TLR16h.sig <- normalized_counts %>%
   data.frame() %>%
-  dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_16h", "TLR10LOV_dark_16h")]) %>%
+  dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_light_16h", "TLR10LOV_dark_16h")]) %>%
   filter(rownames(.) %in% res.TLR16h.sig$ENSG) 
 
 write.csv(res.TLR16h.tb %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_light_16h_vs_TLR10_dark_16h_unfiltered.csv",
@@ -400,7 +345,7 @@ write.csv(res.TLR16h.sig %>% dplyr::select(-threshold), file = "results/DESeq/TL
 
 if (nrow(norm.TLR16h.sig) <= hm_max_rows) {
   
-  heatmap.annotation.row <- annotation_table %>%
+  heatmap.annotation.row <- data$annotation_data %>%
     filter(ENSG %in% rownames(norm.TLR16h.sig))
   
   pheatmap(norm.TLR16h.sig,
@@ -426,10 +371,10 @@ if (nrow(norm.TLR16h.sig) <= hm_max_rows) {
 
   norm.TLR16h.top <- normalized_counts %>%
     data.frame() %>%
-    dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_16h", "TLR10LOV_dark_16h")]) %>%
+    dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_light_16h", "TLR10LOV_dark_16h")]) %>%
     filter(rownames(.) %in% res.TLR16h.top$ENSG) 
   
-  heatmap.annotation.row <- annotation_table %>%
+  heatmap.annotation.row <- data$annotation_data %>%
     filter(ENSG %in% rownames(norm.TLR16h.top))
   
   pheatmap(norm.TLR16h.top,
@@ -493,7 +438,7 @@ res.TLRlightWT3h.tb <- res.TLRlightWT3h %>%
   data.frame() %>%
   rownames_to_column(var = "ENSG") %>%
   as_tibble() %>%
-  right_join(annotation_table, ., by = "ENSG") %>%
+  right_join(data$annotation_data, ., by = "ENSG") %>%
   mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
   
 res.TLRlightWT3h.sig <- res.TLRlightWT3h.tb %>%
@@ -501,7 +446,7 @@ res.TLRlightWT3h.sig <- res.TLRlightWT3h.tb %>%
 
 norm.TLRlightWT3h.sig <- normalized_counts %>%
   data.frame() %>%
-  dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_3h", "wildtype_light_3h")]) %>%
+  dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_light_3h", "wildtype_light_3h")]) %>%
   filter(rownames(.) %in% res.TLRlightWT3h.sig$ENSG) 
 
 write.csv(res.TLRlightWT3h.tb %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_light_3h_vs_wildtype_light_3h_unfiltered.csv",
@@ -516,7 +461,7 @@ write.csv(res.TLRlightWT3h.sig %>% dplyr::select(-threshold), file = "results/DE
 
 if (nrow(norm.TLRlightWT3h.sig) <= hm_max_rows) {
   
-  heatmap.annotation.row <- annotation_table %>%
+  heatmap.annotation.row <- data$annotation_data %>%
     filter(ENSG %in% rownames(norm.TLRlightWT3h.sig))
   
   pheatmap(norm.TLRlightWT3h.sig,
@@ -542,10 +487,10 @@ if (nrow(norm.TLRlightWT3h.sig) <= hm_max_rows) {
 
   norm.TLRlightWT3h.top <- normalized_counts %>%
     data.frame() %>%
-    dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_3h", "wildtype_light_3h")]) %>%
+    dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_light_3h", "wildtype_light_3h")]) %>%
     filter(rownames(.) %in% res.TLRlightWT3h.top$ENSG) 
   
-  heatmap.annotation.row <- annotation_table %>%
+  heatmap.annotation.row <- data$annotation_data %>%
     filter(ENSG %in% rownames(norm.TLRlightWT3h.top))
   
   pheatmap(norm.TLRlightWT3h.top,
@@ -609,7 +554,7 @@ res.TLRlightWT16h.tb <- res.TLRlightWT16h %>%
   data.frame() %>%
   rownames_to_column(var = "ENSG") %>%
   as_tibble() %>%
-  right_join(annotation_table, ., by = "ENSG") %>%
+  right_join(data$annotation_data, ., by = "ENSG") %>%
   mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
   
 res.TLRlightWT16h.sig <- res.TLRlightWT16h.tb %>%
@@ -617,7 +562,7 @@ res.TLRlightWT16h.sig <- res.TLRlightWT16h.tb %>%
 
 norm.TLRlightWT16h.sig <- normalized_counts %>%
   data.frame() %>%
-  dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_16h", "wildtype_light_16h")]) %>%
+  dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_light_16h", "wildtype_light_16h")]) %>%
   filter(rownames(.) %in% res.TLRlightWT16h.sig$ENSG)
 
 write.csv(res.TLRlightWT16h.tb %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_light_16h_vs_wildtype_light_16h_unfiltered.csv",
@@ -632,7 +577,7 @@ write.csv(res.TLRlightWT16h.sig %>% dplyr::select(-threshold), file = "results/D
 
 if (nrow(norm.TLRlightWT16h.sig) <= hm_max_rows) {
   
-  heatmap.annotation.row <- annotation_table %>%
+  heatmap.annotation.row <- data$annotation_data %>%
     filter(ENSG %in% rownames(norm.TLRlightWT16h.sig))
   
   pheatmap(norm.TLRlightWT16h.sig,
@@ -658,10 +603,10 @@ if (nrow(norm.TLRlightWT16h.sig) <= hm_max_rows) {
 
   norm.TLRlightWT16h.top <- normalized_counts %>%
     data.frame() %>%
-    dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_light_16h", "wildtype_light_16h")]) %>%
+    dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_light_16h", "wildtype_light_16h")]) %>%
     filter(rownames(.) %in% res.TLRlightWT16h.top$ENSG) 
   
-  heatmap.annotation.row <- annotation_table %>%
+  heatmap.annotation.row <- data$annotation_data %>%
     filter(ENSG %in% rownames(norm.TLRlightWT16h.top))
   
   pheatmap(norm.TLRlightWT16h.top,
@@ -726,7 +671,7 @@ res.TLRdarkWT3h.tb <- res.TLRdarkWT3h %>%
   data.frame() %>%
   rownames_to_column(var = "ENSG") %>%
   as_tibble() %>%
-  right_join(annotation_table, ., by = "ENSG") %>%
+  right_join(data$annotation_data, ., by = "ENSG") %>%
   mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
   
 res.TLRdarkWT3h.sig <- res.TLRdarkWT3h.tb %>%
@@ -734,7 +679,7 @@ res.TLRdarkWT3h.sig <- res.TLRdarkWT3h.tb %>%
 
 norm.TLRdarkWT3h.sig <- normalized_counts %>%
   data.frame() %>%
-  dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_dark_3h", "wildtype_light_3h")]) %>%
+  dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_dark_3h", "wildtype_light_3h")]) %>%
   filter(rownames(.) %in% res.TLRdarkWT3h.sig$ENSG) 
 
 write.csv(res.TLRdarkWT3h.tb %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_dark_3h_vs_wildtype_light_3h_unfiltered.csv",
@@ -749,7 +694,7 @@ write.csv(res.TLRdarkWT3h.sig %>% dplyr::select(-threshold), file = "results/DES
 
 if (nrow(norm.TLRdarkWT3h.sig) <= hm_max_rows) {
   
-  heatmap.annotation.row <- annotation_table %>%
+  heatmap.annotation.row <- data$annotation_data %>%
     filter(ENSG %in% rownames(norm.TLRdarkWT3h.sig))
   
   pheatmap(norm.TLRdarkWT3h.sig,
@@ -775,10 +720,10 @@ if (nrow(norm.TLRdarkWT3h.sig) <= hm_max_rows) {
 
   norm.TLRdarkWT3h.top <- normalized_counts %>%
     data.frame() %>%
-    dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_dark_3h", "wildtype_light_3h")]) %>%
+    dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_dark_3h", "wildtype_light_3h")]) %>%
     filter(rownames(.) %in% res.TLRdarkWT3h.top$ENSG) 
   
-  heatmap.annotation.row <- annotation_table %>%
+  heatmap.annotation.row <- data$annotation_data %>%
     filter(ENSG %in% rownames(norm.TLRdarkWT3h.top))
   
   pheatmap(norm.TLRdarkWT3h.top,
@@ -842,7 +787,7 @@ res.TLRdarkWT16h.tb <- res.TLRdarkWT16h %>%
   data.frame() %>%
   rownames_to_column(var = "ENSG") %>%
   as_tibble() %>%
-  right_join(annotation_table, ., by = "ENSG") %>%
+  right_join(data$annotation_data, ., by = "ENSG") %>%
   mutate(threshold = padj < 0.05 & abs(log2FoldChange) >= 0.58)
   
 res.TLRdarkWT16h.sig <- res.TLRdarkWT16h.tb %>%
@@ -850,7 +795,7 @@ res.TLRdarkWT16h.sig <- res.TLRdarkWT16h.tb %>%
 
 norm.TLRdarkWT16h.sig <- normalized_counts %>%
   data.frame() %>%
-  dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_dark_16h", "wildtype_light_16h")]) %>%
+  dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_dark_16h", "wildtype_light_16h")]) %>%
   filter(rownames(.) %in% res.TLRdarkWT16h.sig$ENSG)
 
 write.csv(res.TLRdarkWT16h.tb %>% dplyr::select(-threshold), file = "results/DESeq/TLR10_dark_16h_vs_wildtype_light_16h_unfiltered.csv",
@@ -865,7 +810,7 @@ write.csv(res.TLRdarkWT16h.sig %>% dplyr::select(-threshold), file = "results/DE
 
 if (nrow(norm.TLRdarkWT16h.sig) <= hm_max_rows) {
   
-  heatmap.annotation.row <- annotation_table %>%
+  heatmap.annotation.row <- data$annotation_data %>%
     filter(ENSG %in% rownames(norm.TLRdarkWT16h.sig))
   
   pheatmap(norm.TLRdarkWT16h.sig,
@@ -891,10 +836,10 @@ if (nrow(norm.TLRdarkWT16h.sig) <= hm_max_rows) {
 
   norm.TLRdarkWT16h.top <- normalized_counts %>%
     data.frame() %>%
-    dplyr::select(sampledata$sampleID[sampledata$group %in% c("TLR10LOV_dark_16h", "wildtype_light_16h")]) %>%
+    dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_dark_16h", "wildtype_light_16h")]) %>%
     filter(rownames(.) %in% res.TLRdarkWT16h.top$ENSG) 
   
-  heatmap.annotation.row <- annotation_table %>%
+  heatmap.annotation.row <- data$annotation_data %>%
     filter(ENSG %in% rownames(norm.TLRdarkWT16h.top))
   
   pheatmap(norm.TLRdarkWT16h.top,
