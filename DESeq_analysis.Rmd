@@ -31,7 +31,9 @@ hm_cluster_cols <- TRUE # Samples
 hm_scale_by_row <- TRUE
 hm_max_rows <- 20
 
-heatmap.colors <- rev(brewer.pal(6, "RdBu")) # For possible color palettes, see 'brewer.pal.info'
+annotation_colors <- list(Celltype = c("TLR10LOV" = "pink", "wildtype" = "skyblue"),
+                          Condition = c("light" = "grey", "dark" = "black"),
+                          Time = c("3h" = "green", "16h" = "purple"))
 
 ## Volcano plot
 
@@ -58,7 +60,7 @@ data <- import_data("data/Stierschneider_18samples_raw_gene_counts_GeneSymbols_G
 ```{r, run_DESeq}
 # Create DESeq dataset
 dds <- DESeqDataSetFromMatrix(countData = data$count_data, 
-                              colData = data$sample_data, design = ~group)
+                              colData = data$sample_data, design = ~class)
 
 # Run DESeq analysis
 dds = DESeq(dds)
@@ -70,6 +72,9 @@ normalized_counts = counts(dds, normalized = T)
 
 ```{r DESeq_QC}
 
+# Size factors
+sizeFactors(dds)
+
 # Dispersion plot for QC
 plotDispEsts(dds)
 
@@ -77,26 +82,17 @@ plotDispEsts(dds)
 vsd <- vst(dds, blind = T)
 
 # Principal component analysis
-plotPCA(vsd, intgroup=c("group"))
-plotPCA(vsd, intgroup=c("celltype"))
-plotPCA(vsd, intgroup=c("condition"))
-plotPCA(vsd, intgroup=c("time"))
-plotPCA(vsd, intgroup=c("batch"))
-
-plotPCA(vsd, intgroup=c("celltype", "condition"))
-plotPCA(vsd, intgroup=c("celltype", "condition"), pcsToUse = 3:4)
-
+plot_pca(vsd, color_var = c("celltype", "condition"),
+         shape_var = c("time"))
 
 # Correlation heatmap
 samplecorr <- cor(assay(vsd))
-rownames(samplecorr) <- vsd$group
+rownames(samplecorr) <- samples$sampleID
 
-anno_df <- as.data.frame(colData(dds)[, c("celltype", "condition", "time")], row.names = colnames(dds))
+hmap_annotation <- as.data.frame(colData(dds)[, c("celltype", "condition", "time")], row.names = colnames(dds))
 
-pheatmap(samplecorr,
-         show_colnames = F,
-         annotation_col = anno_df,
-         show_rownames = T)
+Heatmap(samplecorr, c("darkblue", "khaki1", "darkred"), name = "Correlation",
+        show_column_names = F, row_dend_reorder = F, column_dend_reorder = F, top_annotation = HeatmapAnnotation(Celltype = hmap_annotation$celltype, Condition = hmap_annotation$condition, Time = hmap_annotation$time, col = annotation_colors, show_annotation_name = F))
 
 ```
 
@@ -104,12 +100,12 @@ pheatmap(samplecorr,
 
 ```{r extract_results}
 
-res.TLR3h = results(dds, contrast = c("group", "TLR10LOV_light_3h", "TLR10LOV_dark_3h"), alpha = 0.05)
-res.TLR16h = results(dds, contrast = c("group", "TLR10LOV_light_16h", "TLR10LOV_dark_16h"), alpha = 0.05)
-res.TLRlightWT3h = results(dds, contrast = c("group", "TLR10LOV_light_3h", "wildtype_light_3h"), alpha = 0.05)
-res.TLRlightWT16h = results(dds, contrast = c("group", "TLR10LOV_light_16h", "wildtype_light_16h"), alpha = 0.05)
-res.TLRdarkWT3h = results(dds, contrast = c("group", "TLR10LOV_dark_3h", "wildtype_light_3h"), alpha = 0.05)
-res.TLRdarkWT16h = results(dds, contrast = c("group", "TLR10LOV_dark_16h", "wildtype_light_16h"), alpha = 0.05)
+res.TLR3h = results(dds, contrast = c("class", "TLR10LOV_light_3h", "TLR10LOV_dark_3h"), alpha = 0.05)
+res.TLR16h = results(dds, contrast = c("class", "TLR10LOV_light_16h", "TLR10LOV_dark_16h"), alpha = 0.05)
+res.TLRlightWT3h = results(dds, contrast = c("class", "TLR10LOV_light_3h", "wildtype_light_3h"), alpha = 0.05)
+res.TLRlightWT16h = results(dds, contrast = c("class", "TLR10LOV_light_16h", "wildtype_light_16h"), alpha = 0.05)
+res.TLRdarkWT3h = results(dds, contrast = c("class", "TLR10LOV_dark_3h", "wildtype_light_3h"), alpha = 0.05)
+res.TLRdarkWT16h = results(dds, contrast = c("class", "TLR10LOV_dark_16h", "wildtype_light_16h"), alpha = 0.05)
 
 plotMA(res.TLR3h, ylim=c(-2, 2), main = "TLR10LOV_light_3h vs TLR10LOV_dark_3h")
 plotMA(res.TLR16h, ylim=c(-2, 2), main = "TLR10LOV_light_16h vs TLR10LOV_dark_16h")
@@ -162,10 +158,28 @@ plotMA(res.TLRdarkWT16h, ylim=c(-2, 2), main = "TLR10LOV_dark_16h vs wildtype_li
 
 ```{r}
 
-#Do not change:
-heatmap.annotation.col <- data$sample_data %>%
-  dplyr::select(sampleID, group) %>%
-  data.frame(row.names = "sampleID")
+results_all <- list(TLR10_light_vs_dark_3h = res.TLR3h,
+                    TLR10_light_vs_dark_16h = res.TLR16h,
+                    TLR10_light_vs_wildtype_3h = res.TLRlightWT3h,
+                    TLR10_light_vs_wildtype_16h = res.TLRlightWT16h,
+                    TLR10_dark_vs_wildtype_3h = res.TLRdarkWT3h,
+                    TLR10_dark_vs_wildtype_16h = res.TLRdarkWT16h)
+
+results_all %>%
+  lapply(function(x) {
+    x %>% 
+      as.data.frame() %>%
+      filter(padj < 0.05 & abs(log2FoldChange) >= 0.58) %>%
+      dplyr::select(log2FoldChange) %>%
+      sign() %>%
+      mutate(Expression = ifelse(log2FoldChange == 1, "Overexpressed", "Underexpressed")) %>%
+      dplyr::select(!log2FoldChange) %>%
+      group_by(Expression) %>%
+      count()
+  }) %>%
+  bind_rows(.id = "Comparison") %>%
+  pivot_wider(names_from = Expression, values_from = n) %>%
+  mutate(Total = Overexpressed + Underexpressed)
 
 ```
 
@@ -174,25 +188,7 @@ heatmap.annotation.col <- data$sample_data %>%
 
 ```{r expression_levels}
 
-counts.plot <- lapply(counts_to_plot, function(x) {
-  plotCounts(dds, data$annotation_data[data$annotation_data$GeneSymbol == x,]$ENSG,
-              intgroup = c("celltype", "condition", "time"), returnData = TRUE)
-  }) %>%
-  set_names(counts_to_plot) %>%
-  lapply(rownames_to_column, var = "Sample_ID") %>%
-  bind_rows(.id = "GeneSymbol") %>%
-  group_by(GeneSymbol, celltype, condition, time) %>%
-  summarise(mean_count = mean(count), sd_count = sd(count), .groups = "drop") %>%
-  mutate(min_error = ifelse(mean_count - sd_count >= 0, mean_count - sd_count, 0), 
-           max_error = mean_count + sd_count)
-
-ggplot(counts.plot, aes(x = interaction(celltype, condition, sep=":", lex.order = T), y = mean_count, fill = time)) +
-  geom_col(position = "dodge") +
-  geom_errorbar(aes(ymin = min_error, ymax = max_error), 
-                position = position_dodge(0.9), width = 0.2) +
-  labs(x = "", y = "Mean Count", fill = "", title = "TLR10 Expression") +
-  theme_pubr() +
-  theme(legend.position = "right", legend.text = element_text(size = 12), panel.grid.major.y = element_line(linewidth = 0.5))
+plot_counts(dds, data$annotation_data, counts_to_plot, c("celltype", "condition"), c("time"))
 
 ```
 
@@ -210,9 +206,12 @@ res.TLR3h.tb <- res.TLR3h %>%
 res.TLR3h.sig <- res.TLR3h.tb %>%
   filter(threshold == TRUE)
 
+pvalues <- res.TLR3h.sig$padj
+names(pvalues) <- rownames(res.TLR3h.sig)
+
 norm.TLR3h.sig <- normalized_counts %>%
   data.frame() %>%
-  dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_light_3h", "TLR10LOV_dark_3h")]) %>%
+  dplyr::select(data$sample_data$sampleID[data$sample_data$class %in% c("TLR10LOV_light_3h", "TLR10LOV_dark_3h")]) %>%
   filter(rownames(.) %in% res.TLR3h.sig$ENSG) 
 
 write.csv(res.TLR3h.tb %>% dplyr::select(-threshold), 
@@ -226,6 +225,11 @@ write.csv(res.TLR3h.sig %>% dplyr::select(-threshold),
 
 
 ```{r TLR3h_heatmap}
+
+plot_heatmap(norm.TLR3h.sig, c("darkblue", "khaki1", "darkred"), 
+             annotation_colors, data$annotation_data, data$sample_data,
+             pvalues, max_rows = hm_max_rows)
+
 if (nrow(norm.TLR3h.sig) <= hm_max_rows) {
   
   heatmap.annotation.row <- data$annotation_data %>%
@@ -267,7 +271,6 @@ if (nrow(norm.TLR3h.sig) <= hm_max_rows) {
            annotation = heatmap.annotation.col,
            labels_row = heatmap.annotation.row$GeneSymbol,
            scale = ifelse(hm_scale_by_row, "row", "none"))
-
 }
 
 
