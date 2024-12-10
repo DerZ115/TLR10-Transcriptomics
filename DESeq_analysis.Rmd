@@ -37,7 +37,7 @@ annotation_colors <- list(Celltype = c("TLR10LOV" = "pink", "wildtype" = "skyblu
 
 ## Volcano plot
 
-vp_max_labels <- 50
+vp_max_labels <- NA
 vp_lfc_limit <- 4
 
 ```
@@ -87,7 +87,7 @@ plot_pca(vsd, color_var = c("celltype", "condition"),
 
 # Correlation heatmap
 samplecorr <- cor(assay(vsd))
-rownames(samplecorr) <- samples$sampleID
+rownames(samplecorr) <- data$sample_data$sampleID
 
 hmap_annotation <- as.data.frame(colData(dds)[, c("celltype", "condition", "time")], row.names = colnames(dds))
 
@@ -226,94 +226,18 @@ write.csv(res.TLR3h.sig %>% dplyr::select(-threshold),
 
 ```{r TLR3h_heatmap}
 
-plot_heatmap(norm.TLR3h.sig, c("darkblue", "khaki1", "darkred"), 
-             annotation_colors, data$annotation_data, data$sample_data,
+plot_heatmap(norm.TLR3h.sig, c("darkblue", "khaki1", "darkred"),
+             c("TLR10LOV_dark_3h" = "#00BFC4", "TLR10LOV_light_3h" = "#F8766D"),
+             c("TLR10LOV Dark 3h", "TLR10LOV Light 3h"),
+             data$annotation_data, data$sample_data,
              pvalues, max_rows = hm_max_rows)
-
-if (nrow(norm.TLR3h.sig) <= hm_max_rows) {
-  
-  heatmap.annotation.row <- data$annotation_data %>%
-    filter(ENSG %in% rownames(norm.TLR3h.sig))
-  
-  pheatmap(norm.TLR3h.sig,
-         color = heatmap.colors,
-         cluster_rows = hm_cluster_rows,
-         cluster_cols = hm_cluster_cols,
-         annotation = heatmap.annotation.col,
-         labels_row = heatmap.annotation.row$GeneSymbol,
-         scale = ifelse(hm_scale_by_row, "row", "none"))
-  
-} else {
-  pheatmap(norm.TLR3h.sig,
-         color = heatmap.colors,
-         cluster_rows = hm_cluster_rows,
-         cluster_cols = hm_cluster_cols,
-         annotation = heatmap.annotation.col,
-         show_rownames = F,
-         scale = ifelse(hm_scale_by_row, "row", "none"))
-  
-  res.TLR3h.top <- res.TLR3h.sig %>%
-    arrange(padj) %>%
-    head(hm_max_rows)
-
-  norm.TLR3h.top <- normalized_counts %>%
-    data.frame() %>%
-    dplyr::select(data$sample_data$sampleID[data$sample_data$group %in% c("TLR10LOV_light_3h", "TLR10LOV_dark_3h")]) %>%
-    filter(rownames(.) %in% res.TLR3h.top$ENSG) 
-  
-  heatmap.annotation.row <- data$annotation_data %>%
-    filter(ENSG %in% rownames(norm.TLR3h.top))
-  
-  pheatmap(norm.TLR3h.top,
-           color = heatmap.colors,
-           cluster_rows = hm_cluster_rows,
-           cluster_cols = hm_cluster_cols,
-           annotation = heatmap.annotation.col,
-           labels_row = heatmap.annotation.row$GeneSymbol,
-           scale = ifelse(hm_scale_by_row, "row", "none"))
-}
-
 
 ```
 
 
 ```{r TLR3h_volcanoplot}
 
-res.TLR3h.plot <- res.TLR3h.tb %>%
-  filter(!is.na(padj)) %>%
-  arrange(padj) %>%
-  mutate(genelabels = "", 
-         out_of_bounds = (abs(log2FoldChange) > vp_lfc_limit) * sign(log2FoldChange),
-         log2FoldChange_capped = ifelse(out_of_bounds != 0, vp_lfc_limit * sign(log2FoldChange), log2FoldChange))
-
-if (is.na(vp_max_labels) || sum(res.TLR3h.plot$threshold) < vp_max_labels) {
-  res.TLR3h.plot$genelabels[res.TLR3h.plot$threshold] <- res.TLR3h.plot$GeneSymbol[res.TLR3h.plot$threshold]
-} else {
-  res.TLR3h.plot$genelabels[res.TLR3h.plot$threshold][1:vp_max_labels] <- res.TLR3h.plot$GeneSymbol[res.TLR3h.plot$threshold][1:vp_max_labels]
-}
-
-maxFC <- max(abs(res.TLR3h.plot$log2FoldChange))
-if (vp_lfc_limit < maxFC) {
-  xlim <- vp_lfc_limit
-} else {
-  xlim <- maxFC * 1.04
-}
-
-ggplot(res.TLR3h.plot, aes(x = log2FoldChange_capped, y = padj)) +
-  geom_point(data = subset(res.TLR3h.plot, out_of_bounds == 0), aes(colour=threshold), alpha = 0.5) +
-  geom_point(data = subset(res.TLR3h.plot, out_of_bounds == -1), aes(colour=threshold), shape = "\u25c4", size=2) +
-  geom_point(data = subset(res.TLR3h.plot, out_of_bounds == 1), aes(colour=threshold), shape = "\u25BA", size=2) +
-  geom_hline(yintercept = 0.05, linetype = 2) +
-  geom_vline(xintercept = c(-0.58, 0.58), linetype = 2) +
-  geom_text_repel(aes(label = genelabels)) +
-  scale_x_continuous(breaks = scales::pretty_breaks(), limits = c(-xlim, xlim), expand = expansion(0.01)) +
-  scale_y_continuous(trans = c("log10", "reverse"), breaks = scales::trans_breaks("log10", function(x) 10^x)) +
-  ggtitle("TRL10LOV 3h light vs dark") +
-  xlab("log2 Fold Change") +
-  ylab("adjusted p-value") +
-  theme_pubr() +
-  theme(legend.position = "none")
-  
+plot_volcano(res.TLR3h.tb, "TRL10LOV 3h Light vs Dark", vp_max_labels, vp_lfc_limit)
 
 ```
 
